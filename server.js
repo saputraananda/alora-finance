@@ -3,7 +3,12 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import infoRoutes from './api/routes/info.routes.js';
+import authRoutes from './api/routes/auth/auth.routes.js';
+import financeDashboardRoutes from './api/routes/dashboard/dashboard.routes.js';
+import financeBudgetsRoutes from './api/routes/budgets/budgets.routes.js';
+import financeCoaRoutes from './api/routes/coa/coa.routes.js';
+import financeJournalRoutes from './api/routes/journal/journal.routes.js';
+import financeGeneralLedgerRoutes from './api/routes/ledger/ledger.routes.js';
 
 // Resolve directory paths in ES module
 const __filename = fileURLToPath(import.meta.url);
@@ -20,7 +25,12 @@ app.use(cors());
 app.use(express.json());
 
 // API Routes
-app.use('/api/info', infoRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api/finance-ho', financeDashboardRoutes);
+app.use('/api/finance-ho', financeBudgetsRoutes);
+app.use('/api/finance-ho', financeCoaRoutes);
+app.use('/api/finance-ho', financeJournalRoutes);
+app.use('/api/finance-ho', financeGeneralLedgerRoutes);
 
 // Serve static assets in production
 if (process.env.NODE_ENV === 'production') {
@@ -32,14 +42,14 @@ if (process.env.NODE_ENV === 'production') {
   });
 } else {
   app.get('/', (req, res) => {
-    res.send('React & Express Starter Pack API Server is running. Frontend dev server is active on port 5173.');
+    res.send('Alfi API Server is running. Frontend dev server is active on port 5173.');
   });
 }
 
 // Start Server
 app.listen(PORT, () => {
   console.log(`=========================================`);
-  console.log(`  React & Express Monorepo Starter Server `);
+  console.log(`  Alfi Server                              `);
   console.log(`  Status: Running                        `);
   console.log(`  Port:   http://localhost:${PORT}        `);
   console.log(`=========================================`);
