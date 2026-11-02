@@ -5,10 +5,10 @@ import { ProtectedRoute, GuestRoute } from './components/RouteGuards.jsx';
 import FinanceLayout from './components/FinanceLayout.jsx';
 import DashboardFinance from './pages/dashboard';
 import Rekonsiliasi from './pages/rekonsiliasi';
-import JurnalUmum from './pages/jurnal-umum';
-import BukuBesar from './pages/buku-besar';
+import JurnalUmum from './pages/journal';
+import BukuBesar from './pages/general-ledger';
 import COA from './pages/coa';
-import AnggaranBeban from './pages/anggaran-beban';
+import AnggaranBeban from './pages/budgets';
 
 function App() {
   return (
