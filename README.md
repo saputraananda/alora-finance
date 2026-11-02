@@ -24,10 +24,10 @@ Folder dibagi **per fitur** (mengikuti pola waschen-mobile). Acuan konvensi kode
 │   │   ├── auth/          # login
 │   │   ├── dashboard/
 │   │   ├── rekonsiliasi/
-│   │   ├── jurnal-umum/
-│   │   ├── buku-besar/
+│   │   ├── journal/
+│   │   ├── general-ledger/
 │   │   ├── coa/
-│   │   └── anggaran-beban/
+│   │   └── budgets/
 │   ├── components/    # FinanceLayout (sidebar + topbar), RouteGuards,
 │   │                  # DetailJurnalModal, ModalFormAkun (dipakai lintas halaman)
 │   └── lib/api.js     # wrapper fetch + token
