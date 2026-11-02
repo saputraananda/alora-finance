@@ -1,52 +1,82 @@
-# Monorepo React + Express Starter
+# Alfi
 
-Proyek ini adalah **starter template** untuk aplikasi full-stack dengan **React (Vite)** di frontend dan **Express.js** di backend, dijalankan bersamaan dengan `concurrently`.
+Aplikasi **HO Finance** Alora (dipindahkan dari SuperApp). Monorepo **React (Vite)** + **Express.js**, login memakai akun SuperApp (SSO).
 
 ## Struktur
 
+Folder dibagi **per fitur** (mengikuti pola waschen-mobile). Acuan konvensi kode ada di `aiAgent/StrukturCode.MD`.
+
 ```
-├── api/              # Backend Express (routes, controllers, models)
-├── src/              # Frontend React (components, pages, hooks)
-├── public/           # Static assets
-├── server.js         # Entry point Express
-├── vite.config.js    # Konfigurasi Vite
-└── package.json      # Dependencies & scripts
+├── api/
+│   ├── controllers/   # satu folder per fitur: <fitur>/<fitur>.controller.js
+│   │   ├── auth/        # login, me
+│   │   ├── dashboard/   # dashboard finance
+│   │   ├── coa/         # master COA
+│   │   ├── budgets/     # anggaran beban
+│   │   ├── journal/     # jurnal umum
+│   │   └── ledger/      # buku besar (general ledger)
+│   ├── routes/        # struktur sama dengan controllers: <fitur>/<fitur>.routes.js
+│   ├── middleware/    # auth.js (JWT)
+│   ├── db/            # pool.js (mainPool & alfiPool)
+│   └── utils/         # currencyHelpers.js
+├── src/
+│   ├── pages/         # satu folder per halaman, masing-masing index.jsx
+│   │   ├── auth/          # login
+│   │   ├── dashboard/
+│   │   ├── rekonsiliasi/
+│   │   ├── jurnal-umum/
+│   │   ├── buku-besar/
+│   │   ├── coa/
+│   │   └── anggaran-beban/
+│   ├── components/    # FinanceLayout (sidebar + topbar), RouteGuards,
+│   │                  # DetailJurnalModal, ModalFormAkun (dipakai lintas halaman)
+│   └── lib/api.js     # wrapper fetch + token
+├── aiAgent/           # dokumentasi konvensi (StrukturCode.MD)
+├── server.js          # Entry point Express
+└── vite.config.js
 ```
 
-## Cara Pakai
+## Routing
+
+| Halaman (frontend) | Prefix API |
+| --- | --- |
+| `/login` | `/api/auth` |
+| `/finance-ho/dashboard`, `/rekonsiliasi`, `/jurnal-umum`, `/buku-besar`, `/coa`, `/anggaran-beban` | `/api/finance-ho/*` |
+
+Semua halaman `/finance-ho/*` wajib login (`ProtectedRoute`). Token JWT disimpan di `localStorage` (`token`, `user`), berlaku 12 jam.
+
+## Menjalankan
 
 ```bash
-# Clone repository
-git clone <repo-url>
-cd <project-folder>
-
-# Install dependencies
 npm install
-
-# Jalankan development (server + client concurrently)
+cp .env.example .env   # isi kredensial database
 npm run dev
 ```
 
-- Frontend: `http://localhost:5173`
-- Backend: `http://localhost:5000`
+- Frontend: http://localhost:5173
+- Backend: http://localhost:5000
+- Production memakai `.env.prod` (dipilih otomatis saat `NODE_ENV=production`).
+
+## Environment
+
+| Variabel | Fungsi |
+| --- | --- |
+| `PORT`, `NODE_ENV`, `CORS_ORIGIN` | Konfigurasi server |
+| `SESSION_SECRET` | Secret penanda tangan JWT |
+| `DB_*` | Database SuperApp (read-only) |
+| `DB_*_ALFI` | Database Alfi |
+
+## Database
+
+- `mainPool` — database SuperApp (read-only; `users`, `mst_employee`, `mst_position`, `mst_department`) untuk login SSO.
+- `alfiPool` — database Alfi: `alfi` (development) / `alfi_prod` (production). Tabel `tr_*` dibuat otomatis oleh controller.
 
 ## Scripts
 
-| Script          | Deskripsi                              |
-| --------------- | -------------------------------------- |
-| `npm run dev`   | Jalankan server & client bersamaan     |
-| `npm run dev:server` | Backend saja (nodemon)           |
-| `npm run dev:client` | Frontend saja (Vite)             |
-| `npm run build` | Build frontend untuk production        |
-| `npm start`     | Jalankan server production             |
-| `npm run preview` | Preview build Vite                  |
-
-## Ganti Nama Project
-
-Ubah field `"name"` di `package.json` sesuai nama project Anda:
-
-```json
-{
-  "name": "nama-project-anda"
-}
-```
+| Script | Deskripsi |
+| --- | --- |
+| `npm run dev` | Server & client bersamaan |
+| `npm run dev:server` | Backend saja (nodemon) |
+| `npm run dev:client` | Frontend saja (Vite) |
+| `npm run build` | Build frontend |
+| `npm start` | Jalankan server (production) |
