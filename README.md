@@ -1,4 +1,4 @@
-# Alfi
+# Alora FInance
 
 Aplikasi **HO Finance** Alora (dipindahkan dari SuperApp). Monorepo **React (Vite)** + **Express.js**, login memakai akun SuperApp (SSO).
 
