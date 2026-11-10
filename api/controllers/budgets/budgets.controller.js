@@ -1,29 +1,12 @@
 import { pool, safeQuery } from "../../db/pool.js";
 import { toFixed2 } from "../../utils/currencyHelpers.js";
+import { cutoffRange, currentCutoffMonth } from "../dashboard/dashboard.controller.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // ANGGARAN BEBAN / BUDGETS
 // ════════════════════════════════════════════════════════════════════════════
 
 // ── Inisialisasi Tabel Anggaran (tr_budgets) ─────────────────────────────────
-const initDb = async () => {
-    try {
-        await safeQuery(`
-      CREATE TABLE IF NOT EXISTS tr_budgets (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        account_id INT NOT NULL,
-        period DATE NOT NULL,
-        amount DECIMAL(18,2) NOT NULL DEFAULT 0.00,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        UNIQUE KEY uk_tr_account_period (account_id, period)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
-    } catch (err) {
-        console.error("❌ Failed to initialize tr_budgets table:", err.message);
-    }
-};
-initDb();
 
 
 
@@ -33,16 +16,15 @@ initDb();
  */
 export async function getBudgets(req, res) {
     try {
-        const now = new Date();
-        const year = parseInt(req.query.year, 10) || now.getFullYear();
-        const month = parseInt(req.query.month, 10) || (now.getMonth() + 1);
+        // Realisasi dihitung per periode cutoff (26 bulan lalu s/d 25 bulan ini);
+        // anggaran tetap disimpan per bulan (tanggal 1).
+        const cur = currentCutoffMonth();
+        const year = parseInt(req.query.year, 10) || cur.year;
+        const month = parseInt(req.query.month, 10) || cur.month;
 
         const pad = (n) => String(n).padStart(2, "0");
         const period = `${year}-${pad(month)}-01`;
-        const periodStart = `${year}-${pad(month)}-01`;
-        const nextMonthDate = new Date(Date.UTC(year, month, 1));
-        const lastDayDate = new Date(nextMonthDate.getTime() - 1);
-        const periodEnd = `${year}-${pad(month)}-${pad(lastDayDate.getUTCDate())}`;
+        const { start: periodStart, end: periodEnd } = cutoffRange(year, month);
 
         const [rows] = await pool.query(
             `SELECT 
@@ -61,7 +43,7 @@ export async function getBudgets(req, res) {
            SUM(jl.debit - jl.credit) AS realization_amount
          FROM tr_journal_lines jl
          JOIN tr_journal_entries je ON jl.entry_id = je.id
-         WHERE je.status = 'POSTED'
+         WHERE je.status IN ('POSTED','REVERSED')
            AND je.entry_date >= ? AND je.entry_date <= ?
          GROUP BY jl.account_id
        ) r ON a.id = r.account_id

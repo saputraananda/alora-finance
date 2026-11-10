@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Banknote, User, Lock, Eye, EyeOff, ArrowRight, AlertCircle, Sparkles } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext.jsx';
 import LoginHero from './components/LoginHero.jsx';
 
 export default function Login() {
@@ -10,6 +11,7 @@ export default function Login() {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const navigate = useNavigate();
+  const { login } = useAuth();
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -21,7 +23,8 @@ export default function Login() {
     setIsLoading(true);
 
     try {
-      const res = await fetch(`${(import.meta.env.VITE_API_URL || '').replace(/\/$/, '')}/api/auth/login`, {
+      const apiUrl = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
+      const res = await fetch(`${apiUrl}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: username.trim(), password }),
@@ -32,9 +35,8 @@ export default function Login() {
         throw new Error(data.message || 'Login gagal. Silakan coba lagi.');
       }
 
-      localStorage.setItem('token', data.token);
-      localStorage.setItem('user', JSON.stringify(data.user));
-      navigate('/finance-ho', { replace: true });
+      login(data.token, data.user);
+      navigate('/', { replace: true });
     } catch (err) {
       setErrorMsg(err.message || 'Tidak dapat terhubung ke server.');
     } finally {

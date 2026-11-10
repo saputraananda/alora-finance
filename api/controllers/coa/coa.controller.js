@@ -5,32 +5,6 @@ import { pool, safeQuery } from "../../db/pool.js";
 // ════════════════════════════════════════════════════════════════════════════
 
 // ── Inisialisasi Tabel Bagan Akun (mst_coa) ─────────────────────────────
-const initDb = async () => {
-    try {
-        await safeQuery(`
-      CREATE TABLE IF NOT EXISTS mst_coa (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        code VARCHAR(50) NOT NULL UNIQUE,
-        name VARCHAR(255) NOT NULL,
-        type ENUM('ASET', 'KEWAJIBAN', 'EKUITAS', 'PENDAPATAN', 'BEBAN') NOT NULL,
-        normal_balance ENUM('DEBIT', 'KREDIT') NOT NULL,
-        parent_id INT NULL,
-        is_header TINYINT(1) NOT NULL DEFAULT 0,
-        is_active TINYINT(1) NOT NULL DEFAULT 1,
-        memo TEXT NULL,
-        created_by INT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        INDEX idx_mst_coa_type (type),
-        INDEX idx_mst_coa_parent (parent_id),
-        INDEX idx_mst_coa_active (is_active)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
-    } catch (err) {
-        console.error("❌ Failed to initialize mst_coa table:", err.message);
-    }
-};
-initDb();
 
 /**
  * GET /api/finance-ho/accounts

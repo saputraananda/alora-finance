@@ -1,4 +1,5 @@
-import { pool, safeQuery, getUserNames } from "../../db/pool.js";
+import { pool, safeQuery, getUserNames, getOutlets } from "../../db/pool.js";
+import { dayLockMessage } from "../../utils/dayLock.js";
 import { formatRupiah, toFixed2 } from "../../utils/currencyHelpers.js";
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -7,61 +8,6 @@ import { formatRupiah, toFixed2 } from "../../utils/currencyHelpers.js";
 
 
 // ── Initialize Tables: Jurnal Umum & Audit Logs ───────────────────────
-const initDb = async () => {
-  try {
-    // 1. Header Jurnal Umum (Journal Entries)
-    await safeQuery(`
-      CREATE TABLE IF NOT EXISTS tr_journal_entries (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        entry_no VARCHAR(50) NOT NULL UNIQUE,
-        entry_date DATE NOT NULL,
-        description TEXT NOT NULL,
-        status ENUM('POSTED', 'REVERSED') NOT NULL DEFAULT 'POSTED',
-        total_amount DECIMAL(18,2) NOT NULL DEFAULT 0.00,
-        reverses_entry_id INT NULL,
-        reversed_by_entry_id INT NULL,
-        created_by INT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_tr_journal_entry_date (entry_date),
-        INDEX idx_tr_journal_status (status)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
-
-    // 2. Baris Jurnal (Journal Lines)
-    await safeQuery(`
-      CREATE TABLE IF NOT EXISTS tr_journal_lines (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        entry_id INT NOT NULL,
-        line_no INT NOT NULL,
-        account_id INT NOT NULL,
-        debit DECIMAL(18,2) NOT NULL DEFAULT 0.00,
-        credit DECIMAL(18,2) NOT NULL DEFAULT 0.00,
-        memo TEXT NULL,
-        INDEX idx_tr_jlines_entry_id (entry_id),
-        INDEX idx_tr_jlines_account_id (account_id)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
-
-    // 3. Tabel Audit Logs
-    await safeQuery(`
-      CREATE TABLE IF NOT EXISTS tr_audit_logs (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        entity VARCHAR(50) NOT NULL,
-        entity_id INT NOT NULL,
-        action ENUM('CREATE', 'UPDATE', 'DEACTIVATE', 'REVERSE') NOT NULL,
-        actor_id INT NULL,
-        changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        before_value JSON NULL,
-        after_value JSON NULL,
-        INDEX idx_tr_audit_entity (entity, entity_id),
-        INDEX idx_tr_audit_actor (actor_id)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
-  } catch (err) {
-    console.error("❌ Failed to initialize Finance Journal tables:", err.message);
-  }
-};
-initDb();
 
 
 
@@ -75,10 +21,22 @@ export async function getJournals(req, res) {
     const limit = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 25));
     const offset = (page - 1) * limit;
 
-    const { q = "", from = "", to = "", status = "" } = req.query;
+    const { q = "", from = "", to = "", status = "", source = "", outlet = "" } = req.query;
 
     const conditions = ["1=1"];
     const params = [];
+
+    if (source) {
+      conditions.push("je.source_type = ?");
+      params.push(source);
+    }
+
+    if (outlet === "PUSAT") {
+      conditions.push("je.outlet_id IS NULL");
+    } else if (outlet) {
+      conditions.push("je.outlet_id = ?");
+      params.push(Number(outlet));
+    }
 
     if (q && q.trim()) {
       conditions.push("(je.entry_no LIKE ? OR je.description LIKE ?)");
@@ -122,7 +80,9 @@ export async function getJournals(req, res) {
          je.reverses_entry_id,
          je.reversed_by_entry_id,
          je.created_by,
-         je.created_at
+         je.created_at,
+         je.source_type,
+         je.outlet_id
        FROM tr_journal_entries je
        WHERE ${whereSql}
        ORDER BY je.entry_date DESC, je.id DESC
@@ -130,11 +90,19 @@ export async function getJournals(req, res) {
       [...params, limit, offset]
     );
 
-    const names = await getUserNames(dataRows.map((r) => r.created_by));
-    dataRows.forEach((r) => { r.creator_name = names.get(Number(r.created_by)) ?? null; });
+    const [names, outlets] = await Promise.all([
+      getUserNames(dataRows.map((r) => r.created_by)),
+      getOutlets(),
+    ]);
+    const outletName = new Map(outlets.map((o) => [o.id, o.name]));
+    dataRows.forEach((r) => {
+      r.creator_name = names.get(Number(r.created_by)) ?? null;
+      r.outlet_name = r.outlet_id ? outletName.get(Number(r.outlet_id)) ?? `Outlet #${r.outlet_id}` : "Pusat";
+    });
 
     return res.json({
       data: dataRows,
+      outlets,
       pagination: {
         page,
         limit,
@@ -168,6 +136,14 @@ export async function getJournalDetail(req, res) {
          je.reversed_by_entry_id,
          je.created_by,
          je.created_at,
+         je.source_type,
+         je.outlet_id,
+         je.approved_by,
+         je.approved_at,
+         je.submitted_at,
+         je.reject_note,
+         je.attachment_url,
+         je.attachment_name,
          rev_from.entry_no as reverses_entry_no,
          rev_by.entry_no as reversed_by_entry_no
        FROM tr_journal_entries je
@@ -182,7 +158,14 @@ export async function getJournalDetail(req, res) {
     }
 
     const journal = headerRows[0];
-    journal.creator_name = (await getUserNames([journal.created_by])).get(Number(journal.created_by)) ?? null;
+    const [uNames, outlets] = await Promise.all([
+      getUserNames([journal.created_by, journal.approved_by]),
+      getOutlets(),
+    ]);
+    const outletName = new Map(outlets.map((o) => [o.id, o.name]));
+    journal.creator_name = uNames.get(Number(journal.created_by)) ?? null;
+    journal.approver_name = uNames.get(Number(journal.approved_by)) ?? null;
+    journal.outlet_name = journal.outlet_id ? outletName.get(Number(journal.outlet_id)) ?? `Outlet #${journal.outlet_id}` : "Pusat";
 
     // Ambil baris jurnal
     const [lineRows] = await pool.query(
@@ -193,6 +176,7 @@ export async function getJournalDetail(req, res) {
          jl.debit,
          jl.credit,
          jl.memo,
+         jl.outlet_id,
          a.code as account_code,
          a.name as account_name,
          a.type as account_type,
@@ -204,6 +188,9 @@ export async function getJournalDetail(req, res) {
       [id]
     );
 
+    lineRows.forEach((l) => {
+      l.outlet_name = l.outlet_id ? outletName.get(Number(l.outlet_id)) ?? `Outlet #${l.outlet_id}` : null;
+    });
     journal.lines = lineRows;
 
     return res.json({ data: journal });
@@ -213,230 +200,6 @@ export async function getJournalDetail(req, res) {
   }
 }
 
-/**
- * POST /api/finance-ho/journals
- * Membuat jurnal umum baru (Atomik, Double-entry balanced validation)
- */
-export async function createJournal(req, res) {
-  const conn = await pool.getConnection();
-
-  try {
-    const { entry_date, description, lines } = req.body;
-    const actorId = req.user?.id || null;
-
-    // 1. Validasi Header
-    if (!entry_date) {
-      return res.status(422).json({
-        code: "INVALID_DATE",
-        message: "Tanggal jurnal wajib diisi.",
-      });
-    }
-
-    if (!description || !description.trim()) {
-      return res.status(422).json({
-        code: "INVALID_DESCRIPTION",
-        message: "Deskripsi jurnal wajib diisi.",
-      });
-    }
-
-    // 2. Validasi Array Baris
-    if (!Array.isArray(lines) || lines.length === 0) {
-      return res.status(422).json({
-        code: "JOURNAL_MIN_LINES",
-        message: "Jurnal minimal harus memiliki 2 baris transaksi bernominal.",
-      });
-    }
-
-    // Filter baris yang punya nominal debit atau kredit
-    const activeLines = lines.filter((l) => {
-      const d = toFixed2(l.debit);
-      const c = toFixed2(l.credit);
-      return d > 0 || c > 0 || Boolean(l.account_id);
-    });
-
-    if (activeLines.length < 2) {
-      return res.status(422).json({
-        code: "JOURNAL_MIN_LINES",
-        message: "Jurnal minimal harus memiliki 2 baris transaksi bernominal.",
-      });
-    }
-
-    let totalDebit = 0;
-    let totalCredit = 0;
-    const accountIds = [];
-
-    // Periksa validitas setiap baris
-    for (let i = 0; i < activeLines.length; i++) {
-      const line = activeLines[i];
-      const d = toFixed2(line.debit);
-      const c = toFixed2(line.credit);
-
-      if (!line.account_id) {
-        return res.status(422).json({
-          code: "ACCOUNT_REQUIRED",
-          message: `Baris ke-${i + 1} belum memilih akun yang valid.`,
-        });
-      }
-
-      // Aturan: Tepat satu dari debit atau credit > 0, tidak keduanya dan tidak nol semua
-      if ((d > 0 && c > 0) || (d === 0 && c === 0)) {
-        return res.status(422).json({
-          code: "LINE_DEBIT_AND_CREDIT",
-          message: `Baris ke-${i + 1} harus mengisi salah satu: debit atau kredit (tidak boleh keduanya dan tidak boleh nol).`,
-        });
-      }
-
-      if (d < 0 || c < 0) {
-        return res.status(422).json({
-          code: "NEGATIVE_AMOUNT",
-          message: `Baris ke-${i + 1} tidak boleh bernilai negatif.`,
-        });
-      }
-
-      totalDebit += d;
-      totalCredit += c;
-      accountIds.push(line.account_id);
-    }
-
-    totalDebit = toFixed2(totalDebit);
-    totalCredit = toFixed2(totalCredit);
-
-    // 3. Validasi Seimbang (Balanced)
-    const diff = toFixed2(Math.abs(totalDebit - totalCredit));
-    if (diff > 0.001 || totalDebit <= 0) {
-      const direction = totalDebit < totalCredit ? "Debit kurang" : "Kredit kurang";
-      return res.status(422).json({
-        code: "JOURNAL_NOT_BALANCED",
-        message: `Total debit (${formatRupiah(totalDebit)}) tidak sama dengan kredit (${formatRupiah(totalCredit)}). Selisih: ${formatRupiah(diff)} (${direction}).`,
-        totalDebit,
-        totalCredit,
-        difference: diff,
-      });
-    }
-
-    // 4. Validasi Akun di Database mst_coa (Konversi ke Number agar perbandingan Map aman)
-    const uniqueAccountIds = [...new Set(accountIds.map((id) => Number(id)))];
-    const [accRows] = await pool.query(
-      `SELECT id, code, name, is_header, is_active FROM mst_coa WHERE id IN (?)`,
-      [uniqueAccountIds]
-    );
-
-    const accMap = new Map();
-    accRows.forEach((a) => accMap.set(Number(a.id), a));
-
-    for (const accId of uniqueAccountIds) {
-      const acc = accMap.get(Number(accId));
-      if (!acc) {
-        return res.status(422).json({
-          code: "ACCOUNT_NOT_FOUND",
-          message: `Akun finansial (COA) dengan ID ${accId} tidak ditemukan di daftar akun.`,
-        });
-      }
-      if (acc.is_active === 0) {
-        return res.status(422).json({
-          code: "ACCOUNT_INACTIVE",
-          message: `Akun "${acc.code} - ${acc.name}" dalam status nonaktif dan tidak bisa digunakan di jurnal.`,
-        });
-      }
-      if (acc.is_header === 1) {
-        return res.status(422).json({
-          code: "ACCOUNT_IS_HEADER",
-          message: `Akun "${acc.code} - ${acc.name}" adalah akun induk/header dan tidak bisa digunakan untuk transaksi.`,
-        });
-      }
-    }
-
-    // 5. Mulai Transaksi Database Atomik
-    await conn.beginTransaction();
-
-    // 6. Generate Nomor Jurnal Otomatis JU-YYYY-MM-NNNN (dengan Lock FOR UPDATE)
-    const dObj = new Date(entry_date);
-    const yearStr = dObj.getFullYear();
-    const monthStr = String(dObj.getMonth() + 1).padStart(2, "0");
-    const prefix = `JU-${yearStr}-${monthStr}-`;
-
-    const [lastRows] = await conn.query(
-      `SELECT entry_no FROM tr_journal_entries 
-       WHERE entry_no LIKE ? 
-       ORDER BY entry_no DESC 
-       LIMIT 1 FOR UPDATE`,
-      [`${prefix}%`]
-    );
-
-    let nextSeq = 1;
-    if (lastRows.length > 0) {
-      const lastNo = lastRows[0].entry_no;
-      const parts = lastNo.split("-");
-      const lastSeq = parseInt(parts[parts.length - 1], 10);
-      if (!isNaN(lastSeq)) {
-        nextSeq = lastSeq + 1;
-      }
-    }
-
-    const entry_no = `${prefix}${String(nextSeq).padStart(4, "0")}`;
-
-    // 7. Simpan Header Jurnal
-    const [headerResult] = await conn.query(
-      `INSERT INTO tr_journal_entries 
-         (entry_no, entry_date, description, status, total_amount, created_by)
-       VALUES (?, ?, ?, 'POSTED', ?, ?)`,
-      [entry_no, entry_date, description.trim(), totalDebit, actorId]
-    );
-
-    const entryId = headerResult.insertId;
-
-    // 8. Simpan Baris Jurnal
-    for (let idx = 0; idx < activeLines.length; idx++) {
-      const line = activeLines[idx];
-      const d = toFixed2(line.debit);
-      const c = toFixed2(line.credit);
-      const memo = line.memo ? line.memo.trim() : null;
-
-      await conn.query(
-        `INSERT INTO tr_journal_lines 
-           (entry_id, line_no, account_id, debit, credit, memo)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [entryId, idx + 1, Number(line.account_id), d, c, memo]
-      );
-    }
-
-    // 9. Catat ke Audit Log
-    try {
-      await conn.query(
-        `INSERT INTO tr_audit_logs 
-           (entity, entity_id, action, actor_id, after_value)
-         VALUES ('tr_journal_entries', ?, 'CREATE', ?, ?)`,
-        [
-          entryId,
-          actorId,
-          JSON.stringify({
-            entry_no,
-            entry_date,
-            description: description.trim(),
-            total_amount: totalDebit,
-            lines_count: activeLines.length,
-          }),
-        ]
-      );
-    } catch (auditErr) {
-      console.warn("[createJournal] Gagal mencatat audit log (lanjut):", auditErr.message);
-    }
-
-    await conn.commit();
-
-    return res.status(201).json({
-      message: "Jurnal berhasil disimpan.",
-      entry_no,
-      id: entryId,
-    });
-  } catch (err) {
-    await conn.rollback();
-    console.error("[createJournal] Error:", err);
-    return res.status(500).json({ message: "Gagal menyimpan jurnal", error: err.message });
-  } finally {
-    conn.release();
-  }
-}
 
 /**
  * POST /api/finance-ho/journals/:id/reverse
@@ -472,6 +235,15 @@ export async function reverseJournal(req, res) {
 
     const orig = origRows[0];
 
+    // Hanya jurnal yang sudah diposting yang bisa dibalik (bukan draft / menunggu approval)
+    if (orig.status === "DRAFT" || orig.status === "PENDING") {
+      await conn.rollback();
+      return res.status(422).json({
+        code: "JOURNAL_NOT_POSTED",
+        message: "Jurnal belum diposting, tidak bisa dibalik. Hapus draft atau tolak pengajuannya.",
+      });
+    }
+
     // Aturan 6: Jurnal yang sudah dibalik tidak bisa dibalik lagi
     if (orig.status === "REVERSED" || orig.reversed_by_entry_id) {
       await conn.rollback();
@@ -493,6 +265,13 @@ export async function reverseJournal(req, res) {
         code: "EMPTY_JOURNAL",
         message: "Jurnal asal tidak memiliki baris transaksi.",
       });
+    }
+
+    // Jurnal balik tidak boleh jatuh di tanggal yang sudah dikunci
+    const lockMsg = await dayLockMessage(entry_date, [orig.outlet_id, ...origLines.map((l) => l.outlet_id)]);
+    if (lockMsg) {
+      await conn.rollback();
+      return res.status(422).json({ code: "DAY_LOCKED", message: lockMsg });
     }
 
     // 3. Generate nomor jurnal pembalik
@@ -523,9 +302,9 @@ export async function reverseJournal(req, res) {
     // 4. Insert header jurnal pembalik
     const [revHeaderResult] = await conn.query(
       `INSERT INTO tr_journal_entries 
-         (entry_no, entry_date, description, status, total_amount, reverses_entry_id, created_by)
-       VALUES (?, ?, ?, 'POSTED', ?, ?, ?)`,
-      [reverseEntryNo, entry_date, reverseDesc, orig.total_amount, orig.id, actorId]
+         (entry_no, entry_date, description, status, total_amount, reverses_entry_id, created_by, outlet_id)
+       VALUES (?, ?, ?, 'POSTED', ?, ?, ?, ?)`,
+      [reverseEntryNo, entry_date, reverseDesc, orig.total_amount, orig.id, actorId, orig.outlet_id ?? null]
     );
 
     const reverseEntryId = revHeaderResult.insertId;
@@ -540,9 +319,9 @@ export async function reverseJournal(req, res) {
 
       await conn.query(
         `INSERT INTO tr_journal_lines 
-           (entry_id, line_no, account_id, debit, credit, memo)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [reverseEntryId, i + 1, Number(line.account_id), newDebit, newCredit, memo]
+           (entry_id, line_no, account_id, debit, credit, memo, outlet_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [reverseEntryId, i + 1, Number(line.account_id), newDebit, newCredit, memo, line.outlet_id ?? null]
       );
     }
 

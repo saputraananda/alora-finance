@@ -41,6 +41,10 @@ export const login = async (req, res) => {
       email: user.email,
       role: user.role,
       fullName: user.full_name || user.name,
+      employeeCode: user.employee_code,
+      position: user.position_name || null,
+      department: user.department_name || null,
+      profilePath: user.profile_path || null,
     };
     const token = jwt.sign(payload, JWT_SECRET(), { expiresIn: '12h' });
 
@@ -48,13 +52,7 @@ export const login = async (req, res) => {
       success: true,
       message: 'Login berhasil',
       token,
-      user: {
-        ...payload,
-        employeeCode: user.employee_code,
-        position: user.position_name || null,
-        department: user.department_name || null,
-        profilePath: user.profile_path || null,
-      },
+      user: payload,
     });
   } catch (error) {
     console.error('[login] Error:', error);

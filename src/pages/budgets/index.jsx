@@ -18,6 +18,7 @@ import {
   HiOutlineBookOpen,
 } from "react-icons/hi2";
 import { api } from "../../lib/api";
+import { currentCutoff, cutoffRangeLabel } from "../../lib/cutoff";
 
 function cn(...classes) {
   return classes.filter(Boolean).join(" ");
@@ -48,9 +49,8 @@ const MONTH_NAMES = [
 ];
 
 export default function AnggaranBeban() {
-  const now = new Date();
-  const currentYear = now.getFullYear();
-  const currentMonth = now.getMonth() + 1;
+  // Periode cutoff berjalan (hari ≥ 26 masuk periode bulan berikutnya)
+  const { year: currentYear, month: currentMonth } = currentCutoff();
 
   const [selectedYear, setSelectedYear] = useState(currentYear);
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
@@ -342,7 +342,8 @@ export default function AnggaranBeban() {
               )}
             </div>
             <p className="mt-1 text-xs text-slate-500">
-              Target plafon beban {MONTH_NAMES[selectedMonth - 1]} {selectedYear}
+              Target plafon beban {MONTH_NAMES[selectedMonth - 1]} {selectedYear} · realisasi{" "}
+              {cutoffRangeLabel(`${selectedYear}-${String(selectedMonth).padStart(2, "0")}`)}
             </p>
           </div>
         </div>

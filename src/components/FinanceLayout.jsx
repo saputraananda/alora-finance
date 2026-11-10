@@ -4,6 +4,11 @@ import {
   HiOutlineArrowLeft,
   HiOutlineArrowRightOnRectangle,
   HiOutlineBars3,
+  HiOutlineComputerDesktop,
+  HiOutlineCog6Tooth,
+  HiOutlineUsers,
+  HiOutlineLockClosed,
+  HiOutlineBuildingOffice2,
   HiOutlineXMark,
   HiOutlineBookOpen,
   HiOutlineDocumentText,
@@ -15,61 +20,57 @@ import {
   HiOutlineReceiptPercent,
   HiOutlineDocumentChartBar,
   HiOutlineCircleStack,
-  HiOutlineChevronDown,
 } from "react-icons/hi2";
 
 import { clearSession } from "../lib/api";
+import { useAuth } from "../context/AuthContext";
 
 function cn(...classes) {
   return classes.filter(Boolean).join(" ");
 }
 
-// ── Standalone (Direct) Menu Items ──────────────────────────────────────────
+// ── Menu mengikuti "Peta menu" Referensi Tampilan Aplikasi (12 menu utama) ──
+// Menu yang modulnya belum dibangun (Kas Kecil, Pembelian, Persediaan, Aset Tetap)
+// tampil sebagai "Segera hadir" di Beranda, tidak di sidebar.
 const STANDALONE_ITEMS = [
-  {
-    to: "/finance-ho/dashboard",
-    icon: HiOutlineChartBar,
-    label: "Dashboard",
-    description: "Revenue, beban & realisasi budget",
-    end: false,
-  },
-  {
-    to: "/finance-ho/rekonsiliasi",
-    icon: HiOutlineScale,
-    label: "Rekonsiliasi",
-    description: "Penyelarasan kas & bank",
-    end: false,
-  },
+  { to: "/finance-ho/dashboard", icon: HiOutlineChartBar, label: "Dashboard", description: "Ringkasan semua cabang", end: false },
+  { to: "/finance-ho/integrasi-pos", icon: HiOutlineComputerDesktop, label: "Integrasi POS", description: "Sinkronisasi harian & detail batch", end: false },
+  { to: "/finance-ho/jurnal-umum", icon: HiOutlineBookOpen, label: "Jurnal", description: "Daftar jurnal & jurnal manual", end: true },
+  { to: "/finance-ho/rekonsiliasi", icon: HiOutlineScale, label: "Rekonsiliasi", description: "Harian, settlement, setoran, bank", end: false },
 ];
 
-// ── Collapsible Menu Sections ───────────────────────────────────────────────
 const OPERATIONAL_SECTIONS = [
   {
-    id: "transaksi",
-    label: "Transaksi",
-    icon: HiOutlineReceiptPercent,
+    id: "pelanggan",
+    label: "Pelanggan",
+    icon: HiOutlineUsers,
     items: [
-      {
-        to: "/finance-ho/jurnal-umum",
-        icon: HiOutlineBookOpen,
-        label: "Jurnal Umum",
-        description: "Pencatatan transaksi double-entry",
-        end: true,
-      },
+      { to: "/finance-ho/pelanggan/deposit", icon: HiOutlineUsers, label: "Deposit Member", description: "Saldo POS vs akun Deposit", end: false },
+    ],
+  },
+  {
+    id: "aset",
+    label: "Aset Tetap",
+    icon: HiOutlineBuildingOffice2,
+    items: [
+      { to: "/finance-ho/aset-tetap", icon: HiOutlineBuildingOffice2, label: "Aset Tetap", description: "Daftar aset & penyusutan", end: false },
     ],
   },
   {
     id: "report",
-    label: "Report",
+    label: "Laporan",
     icon: HiOutlineDocumentChartBar,
     items: [
-      {
-        to: "/finance-ho/buku-besar",
-        icon: HiOutlineDocumentText,
-        label: "General Ledger",
-        description: "Rincian mutasi & saldo per akun",
-        end: false,
-      },
+      { to: "/finance-ho/laporan", icon: HiOutlineDocumentChartBar, label: "Laporan Keuangan", description: "Laba rugi, neraca, aging, rekap", end: false },
+      { to: "/finance-ho/buku-besar", icon: HiOutlineDocumentText, label: "Buku Besar", description: "Rincian mutasi & saldo per akun", end: false },
+    ],
+  },
+  {
+    id: "tutup-buku",
+    label: "Tutup Buku",
+    icon: HiOutlineLockClosed,
+    items: [
+      { to: "/finance-ho/tutup-buku", icon: HiOutlineLockClosed, label: "Tutup Buku", description: "Checklist periode & alokasi biaya pusat", end: false },
     ],
   },
 ];
@@ -77,23 +78,12 @@ const OPERATIONAL_SECTIONS = [
 const MASTER_SECTIONS = [
   {
     id: "master",
-    label: "Master Data",
-    icon: HiOutlineCircleStack,
+    label: "Pengaturan",
+    icon: HiOutlineCog6Tooth,
     items: [
-      {
-        to: "/finance-ho/coa",
-        icon: HiOutlineNumberedList,
-        label: "Master COA",
-        description: "Bagan akun & saldo normal",
-        end: false,
-      },
-      {
-        to: "/finance-ho/anggaran-beban",
-        icon: HiOutlineCalculator,
-        label: "Anggaran Beban",
-        description: "Budget per akun per bulan",
-        end: false,
-      },
+      { to: "/finance-ho/pengaturan", icon: HiOutlineCog6Tooth, label: "Cabang & Metode Bayar", description: "Rekening bank & pemetaan akun", end: false },
+      { to: "/finance-ho/coa", icon: HiOutlineNumberedList, label: "Master COA", description: "Bagan akun & saldo normal", end: false },
+      { to: "/finance-ho/anggaran-beban", icon: HiOutlineCalculator, label: "Anggaran Beban", description: "Budget per akun per bulan", end: false },
     ],
   },
 ];
@@ -114,6 +104,15 @@ function isItemActive(pathname, item) {
     return true;
   }
   return pathname === item.to || pathname.startsWith(`${item.to}/`);
+}
+
+// Menu yang punya lebih dari 1 submenu → baru tampil sidebar.
+function findGroup(pathname) {
+  return (
+    MENU_SECTIONS.find(
+      (sec) => sec.items.length > 1 && sec.items.some((it) => isItemActive(pathname, it))
+    ) || null
+  );
 }
 
 function NavItem({ to, icon: Icon, label, description, end, onClose, collapsed }) {
@@ -161,85 +160,10 @@ function NavItem({ to, icon: Icon, label, description, end, onClose, collapsed }
   );
 }
 
-// ── Collapsible Dropdown Section (Gaya My Waschen) ──────────────────────────
-function DropdownSection({ section, open, onToggle, collapsed, onClose, pathname }) {
-  const SectionIcon = section.icon;
-  const hasActiveChild = section.items.some((item) => isItemActive(pathname, item));
-
-  if (collapsed) {
-    return (
-      <div className="space-y-0.5 px-1.5 py-1">
-        {section.items.map((item) => (
-          <NavItem key={item.to} {...item} onClose={onClose} collapsed />
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <div className="pt-1">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        className={cn(
-          "flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition",
-          hasActiveChild
-            ? "bg-emerald-50/70 text-emerald-800 font-bold"
-            : "text-slate-700 hover:bg-slate-100"
-        )}
-      >
-        <div
-          className={cn(
-            "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition",
-            hasActiveChild
-              ? "border-emerald-200 bg-white text-emerald-700 shadow-xs"
-              : "border-slate-200 bg-white text-slate-400"
-          )}
-        >
-          <SectionIcon className="h-4 w-4" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-bold leading-none">{section.label}</p>
-          <p className="mt-0.5 truncate text-[11px] leading-none text-slate-400">
-            {section.items.length} menu
-          </p>
-        </div>
-        <HiOutlineChevronDown
-          className={cn(
-            "h-4 w-4 shrink-0 text-slate-400 transition-transform duration-200",
-            open && "rotate-180",
-            hasActiveChild && "text-emerald-700"
-          )}
-        />
-      </button>
-
-      {/* Smooth CSS Grid Folding (Mirip My Waschen) */}
-      <div
-        className={cn(
-          "grid transition-[grid-template-rows] duration-200 ease-out",
-          open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
-        )}
-      >
-        <div className="overflow-hidden">
-          <nav className="mt-1 space-y-0.5 border-l-2 border-emerald-100 ml-5 pl-2 pb-1">
-            {section.items.map((item) => (
-              <NavItem key={item.to} {...item} onClose={onClose} collapsed={false} />
-            ))}
-          </nav>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Sidebar({ collapsed = false, onClose, openSections, setOpenSections }) {
+// Sidebar hanya dipakai untuk menu yang punya submenu (lebih dari 1 halaman).
+function Sidebar({ group, collapsed = false, onClose }) {
   const navigate = useNavigate();
-  const { pathname } = useLocation();
-
-  const toggleSection = (id) => {
-    setOpenSections((prev) => ({ ...prev, [id]: !prev[id] }));
-  };
+  const GroupIcon = group.icon;
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-white">
@@ -254,24 +178,19 @@ function Sidebar({ collapsed = false, onClose, openSections, setOpenSections }) 
               : "px-5"
         )}
       >
-        {!collapsed && (
+        {!collapsed ? (
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-600 to-teal-500 shadow-md shadow-emerald-600/20">
-              <HiOutlineBanknotes className="h-5 w-5 text-white" />
+              <GroupIcon className="h-5 w-5 text-white" />
             </div>
             <div className="min-w-0">
-              <p className="truncate text-sm font-bold text-slate-800 leading-tight">
-                HO Finance
-              </p>
-              <p className="truncate text-[11px] text-slate-400">
-                Alora SuperApp
-              </p>
+              <p className="truncate text-sm font-bold text-slate-800 leading-tight">{group.label}</p>
+              <p className="truncate text-[11px] text-slate-400">HO Finance</p>
             </div>
           </div>
-        )}
-        {collapsed && (
+        ) : (
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-600 to-teal-500 shadow-md">
-            <HiOutlineBanknotes className="h-5 w-5 text-white" />
+            <GroupIcon className="h-5 w-5 text-white" />
           </div>
         )}
         {onClose && (
@@ -286,63 +205,26 @@ function Sidebar({ collapsed = false, onClose, openSections, setOpenSections }) 
         )}
       </div>
 
-      {/* Menu label */}
-      {!collapsed && (
-        <p className="px-5 pt-3.5 pb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-          Menu Navigasi
-        </p>
-      )}
-      {collapsed && <div className="pt-2" />}
+      <nav className={cn("flex-1 overflow-y-auto space-y-1 pt-3", collapsed ? "px-1.5" : "px-3")}>
+        <button
+          type="button"
+          onClick={() => { navigate("/"); onClose?.(); }}
+          title={collapsed ? "Beranda" : undefined}
+          className={cn(
+            "mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-900",
+            collapsed && "justify-center px-2"
+          )}
+        >
+          <HiOutlineArrowLeft className="h-5 w-5 shrink-0" />
+          {!collapsed && <span>Beranda</span>}
+        </button>
 
-      {/* Navigation items */}
-      <nav className={cn("flex-1 overflow-y-auto space-y-1", collapsed ? "px-1.5" : "px-3")}>
-        {/* 1. Standalone Items: Dashboard & Rekonsiliasi */}
         <div className="space-y-0.5">
-          {STANDALONE_ITEMS.map((item) => (
+          {group.items.map((item) => (
             <NavItem key={item.to} {...item} onClose={onClose} collapsed={collapsed} />
           ))}
         </div>
-
-        {/* 2. Operasional Sections: Transaksi & Report */}
-        <div className="pt-1 space-y-0.5">
-          {OPERATIONAL_SECTIONS.map((section) => (
-            <DropdownSection
-              key={section.id}
-              section={section}
-              open={Boolean(openSections[section.id])}
-              onToggle={() => toggleSection(section.id)}
-              collapsed={collapsed}
-              onClose={onClose}
-              pathname={pathname}
-            />
-          ))}
-        </div>
-
-        {/* 3. Master Menu Section Header */}
-        {!collapsed && (
-          <p className="px-3 pt-3 pb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-            Master Menu
-          </p>
-        )}
-        {collapsed && <div className="pt-2" />}
-
-        {/* 4. Collapsible Master Sections */}
-        <div className="space-y-0.5">
-          {MASTER_SECTIONS.map((section) => (
-            <DropdownSection
-              key={section.id}
-              section={section}
-              open={Boolean(openSections[section.id])}
-              onToggle={() => toggleSection(section.id)}
-              collapsed={collapsed}
-              onClose={onClose}
-              pathname={pathname}
-            />
-          ))}
-        </div>
       </nav>
-
-
     </div>
   );
 }
@@ -383,8 +265,9 @@ function UserMenu() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
+  const { user: authUser, logout } = useAuth();
 
-  const user = getStoredUser();
+  const user = authUser || getStoredUser();
   // Shape dari POST /api/auth/login: { fullName, username, department, position, ... }
   const fullName = user.fullName || user.name || user.username || "User";
   const department =
@@ -402,8 +285,7 @@ function UserMenu() {
   }, []);
 
   const handleLogout = () => {
-    clearSession();
-    sessionStorage.clear();
+    logout();
     navigate("/login", { replace: true });
   };
 
@@ -451,21 +333,13 @@ function UserMenu() {
 
 export default function FinanceLayout() {
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [desktopCollapsed, setCollapsed] = useState(false);
   const drawerRef = useRef(null);
 
-  // Status open/close untuk setiap dropdown section (default tertutup / collapsed)
-  const [openSections, setOpenSections] = useState({});
-
-  // Otomatis buka section jika route anak aktif
-  useEffect(() => {
-    MENU_SECTIONS.forEach((section) => {
-      if (section.items.some((item) => isItemActive(pathname, item))) {
-        setOpenSections((prev) => ({ ...prev, [section.id]: true }));
-      }
-    });
-  }, [pathname]);
+  const group = findGroup(pathname);
+  const hasSidebar = Boolean(group);
 
   // Keyboard: Escape to close drawer
   useEffect(() => {
@@ -491,22 +365,19 @@ export default function FinanceLayout() {
 
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-800 antialiased font-sans">
-      {/* ── Desktop Sidebar ──────────────────────────────────────────────── */}
-      <aside
-        className={cn(
-          "sticky top-0 hidden h-screen shrink-0 border-r border-slate-200 bg-white transition-[width] duration-300 ease-in-out lg:flex lg:flex-col",
-          desktopCollapsed ? "w-20" : "w-64"
-        )}
-      >
-        <Sidebar
-          collapsed={desktopCollapsed}
-          openSections={openSections}
-          setOpenSections={setOpenSections}
-        />
-      </aside>
+      {hasSidebar && (
+        <aside
+          className={cn(
+            "sticky top-0 hidden h-screen shrink-0 border-r border-slate-200 bg-white transition-[width] duration-300 ease-in-out lg:flex lg:flex-col",
+            desktopCollapsed ? "w-20" : "w-64"
+          )}
+        >
+          <Sidebar group={group} collapsed={desktopCollapsed} />
+        </aside>
+      )}
 
       {/* ── Mobile Drawer (Backdrop + Slide-over) ─────────────────────────── */}
-      {mobileOpen && (
+      {hasSidebar && mobileOpen && (
         <div className="fixed inset-0 z-50 lg:hidden">
           <div
             className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity duration-300"
@@ -519,12 +390,7 @@ export default function FinanceLayout() {
             role="dialog"
             aria-modal="true"
           >
-            <Sidebar
-              collapsed={false}
-              onClose={() => setMobileOpen(false)}
-              openSections={openSections}
-              setOpenSections={setOpenSections}
-            />
+            <Sidebar group={group} collapsed={false} onClose={() => setMobileOpen(false)} />
           </div>
         </div>
       )}
@@ -534,11 +400,21 @@ export default function FinanceLayout() {
         {/* Top bar */}
         <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md sm:px-6">
           <div className="flex items-center gap-3">
+            {!hasSidebar && (
+              <button
+                type="button"
+                onClick={() => navigate("/")}
+                className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-200 px-3 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
+              >
+                <HiOutlineArrowLeft className="h-4 w-4" />
+                <span className="hidden sm:inline">Beranda</span>
+              </button>
+            )}
             {/* Mobile hamburger */}
             <button
               type="button"
               onClick={() => setMobileOpen(true)}
-              className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition lg:hidden"
+              className={cn("flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition lg:hidden", !hasSidebar && "!hidden")}
               aria-label="Buka menu navigasi"
             >
               <HiOutlineBars3 className="h-5 w-5" />
@@ -548,7 +424,7 @@ export default function FinanceLayout() {
             <button
               type="button"
               onClick={() => setCollapsed((v) => !v)}
-              className="hidden h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition lg:flex"
+              className={cn("hidden h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition", hasSidebar && "lg:flex")}
               aria-label={desktopCollapsed ? "Buka sidebar" : "Tutup sidebar"}
               title={desktopCollapsed ? "Perlebar menu" : "Ciutkan menu"}
             >

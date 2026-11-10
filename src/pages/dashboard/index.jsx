@@ -21,6 +21,25 @@ import {
 } from "react-icons/hi2";
 import { api } from "../../lib/api";
 import DetailJurnalModal from "../../components/DetailJurnalModal";
+import DashboardOverview from "./Overview";
+
+// Periode cutoff Waschen: tgl 26 bulan lalu s/d 25 bulan berjalan.
+// Hari >= 26 sudah masuk periode bulan berikutnya.
+function currentCutoff() {
+  const [y, m, d] = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" })
+    .format(new Date())
+    .split("-")
+    .map(Number);
+  const dt = new Date(Date.UTC(y, m - 1 + (d >= 26 ? 1 : 0), 1));
+  return { year: dt.getUTCFullYear(), month: dt.getUTCMonth() + 1 };
+}
+
+function formatPeriodLabel(start, end) {
+  if (!start || !end) return "";
+  const mon = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+  const f = (s) => `${Number(s.slice(8, 10))} ${mon[Number(s.slice(5, 7)) - 1]} ${s.slice(0, 4)}`;
+  return `${f(start)} – ${f(end)}`;
+}
 
 function cn(...classes) {
   return classes.filter(Boolean).join(" ");
@@ -65,12 +84,15 @@ const MONTH_NAMES = [
 
 export default function DashboardFinance() {
   const navigate = useNavigate();
-  const now = new Date();
-  const currentYear = now.getFullYear();
-  const currentMonth = now.getMonth() + 1;
+  const cutoffNow = useMemo(() => currentCutoff(), []);
+  const currentYear = cutoffNow.year;
+  const currentMonth = cutoffNow.month;
 
   const [selectedYear, setSelectedYear] = useState(currentYear);
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
+  const [selectedOutlet, setSelectedOutlet] = useState("");
+  const [outletList, setOutletList] = useState([]);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const [dashboardData, setDashboardData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -83,7 +105,7 @@ export default function DashboardFinance() {
     setError("");
     try {
       const res = await api(
-        `/finance-ho/dashboard?year=${selectedYear}&month=${selectedMonth}`
+        `/finance-ho/dashboard?year=${selectedYear}&month=${selectedMonth}${selectedOutlet ? `&outlet=${selectedOutlet}` : ""}`
       );
       setDashboardData(res.data);
     } catch (err) {
@@ -94,7 +116,7 @@ export default function DashboardFinance() {
     } finally {
       setLoading(false);
     }
-  }, [selectedYear, selectedMonth]);
+  }, [selectedYear, selectedMonth, selectedOutlet]);
 
   useEffect(() => {
     fetchDashboard();
@@ -163,13 +185,30 @@ export default function DashboardFinance() {
                 Dashboard Keuangan HO
               </h1>
               <p className="text-xs sm:text-sm text-emerald-50 mt-0.5 font-medium drop-shadow-xs">
-                Ringkasan eksekutif pendapatan, beban operasional, dan realisasi anggaran
+                Periode cutoff {formatPeriodLabel(dashboardData?.period?.start_date, dashboardData?.period?.end_date)}
               </p>
             </div>
           </div>
 
           {/* Periode Selector & Action Controls */}
           <div className="flex flex-wrap items-center gap-2">
+            {/* Cabang */}
+            <div className="flex items-center gap-1.5 rounded-xl border border-white/40 bg-white/95 px-3 py-1.5 shadow-sm backdrop-blur-xs">
+              <HiOutlineBuildingLibrary className="h-4 w-4 text-emerald-700 shrink-0" />
+              <select
+                value={selectedOutlet}
+                onChange={(e) => setSelectedOutlet(e.target.value)}
+                className="bg-transparent text-xs sm:text-sm font-bold text-slate-800 outline-none cursor-pointer"
+              >
+                <option value="">Semua cabang</option>
+                {outletList.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {/* Bulan */}
             <div className="flex items-center gap-1.5 rounded-xl border border-white/40 bg-white/95 px-3 py-1.5 shadow-sm backdrop-blur-xs">
               <HiOutlineCalendarDays className="h-4 w-4 text-emerald-700 shrink-0" />
@@ -206,7 +245,10 @@ export default function DashboardFinance() {
             {/* Tombol Refresh */}
             <button
               type="button"
-              onClick={fetchDashboard}
+              onClick={() => {
+                fetchDashboard();
+                setRefreshKey((k) => k + 1);
+              }}
               disabled={loading}
               title="Refresh data"
               className="flex items-center justify-center rounded-xl border border-white/40 bg-white/95 p-2 text-slate-700 shadow-sm transition hover:bg-white disabled:opacity-50"
@@ -448,6 +490,15 @@ export default function DashboardFinance() {
           </Link>
         </div>
       </div>
+
+      {/* ── 1b. Ringkasan per cabang: rekonsiliasi, perlu tindakan, aging ── */}
+      <DashboardOverview
+        year={selectedYear}
+        month={selectedMonth}
+        outlet={selectedOutlet}
+        refreshKey={refreshKey}
+        onOutlets={setOutletList}
+      />
 
       {/* ── 2. Middle Section: Tren 6 Bulan & Top Beban ──────────────────── */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 mb-6">

@@ -13,6 +13,7 @@ import {
   HiOutlineScale,
 } from "react-icons/hi2";
 import { api } from "../../lib/api";
+import { currentCutoffKey, cutoffRangeForKey } from "../../lib/cutoff";
 import DetailJurnalModal from "../../components/DetailJurnalModal";
 
 function cn(...classes) {
@@ -41,13 +42,10 @@ function formatDate(dateStr) {
   }
 }
 
+// Rentang bawaan = periode cutoff berjalan (26 bulan lalu – 25 bulan ini)
 function getDefaultDateRange() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth();
-  const firstDay = new Date(year, month, 1).toISOString().split("T")[0];
-  const lastDay = new Date(year, month + 1, 0).toISOString().split("T")[0];
-  return { firstDay, lastDay };
+  const { from, to } = cutoffRangeForKey(currentCutoffKey());
+  return { firstDay: from, lastDay: to };
 }
 
 const TYPE_CONFIG = {
@@ -64,9 +62,12 @@ export default function BukuBesar() {
   const { firstDay, lastDay } = getDefaultDateRange();
 
   const [accounts, setAccounts] = useState([]);
+  const [outlets, setOutlets] = useState([]);
   const [selectedAccountId, setSelectedAccountId] = useState(qAccId || "");
-  const [fromDate, setFromDate] = useState(firstDay);
-  const [toDate, setToDate] = useState(lastDay);
+  // from / to / outlet bisa datang dari tautan Laporan keuangan (penelusuran)
+  const [fromDate, setFromDate] = useState(searchParams.get("from") || firstDay);
+  const [toDate, setToDate] = useState(searchParams.get("to") || lastDay);
+  const [outletFilter, setOutletFilter] = useState(searchParams.get("outlet") || "");
 
   const [ledgerData, setLedgerData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -111,6 +112,7 @@ export default function BukuBesar() {
         from: fromDate,
         to: toDate,
       });
+      if (outletFilter) qs.set("outlet", outletFilter);
 
       const res = await api(`/finance-ho/general-ledger?${qs.toString()}`);
       setLedgerData(res.data);
@@ -121,7 +123,14 @@ export default function BukuBesar() {
     } finally {
       setLoading(false);
     }
-  }, [selectedAccountId, fromDate, toDate]);
+  }, [selectedAccountId, fromDate, toDate, outletFilter]);
+
+  // Daftar cabang untuk filter
+  useEffect(() => {
+    api("/finance-ho/journals/meta")
+      .then((res) => setOutlets(res.outlets || []))
+      .catch(() => {});
+  }, []);
 
   // Otomatis fetch saat akun pertama kali dipilih
   useEffect(() => {
@@ -189,7 +198,7 @@ export default function BukuBesar() {
 
           {/* Filter Card */}
           <section className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm space-y-4 print:hidden">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
               {/* Dropdown Akun */}
               <div className="lg:col-span-2">
                 <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
@@ -204,6 +213,26 @@ export default function BukuBesar() {
                   {accounts.map((acc) => (
                     <option key={acc.id} value={acc.id}>
                       {acc.code} - {acc.name} ({acc.type} • Normal {acc.normal_balance})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Cabang */}
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                  Cabang
+                </label>
+                <select
+                  value={outletFilter}
+                  onChange={(e) => setOutletFilter(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                >
+                  <option value="">Semua</option>
+                  <option value="PUSAT">Pusat</option>
+                  {outlets.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.name}
                     </option>
                   ))}
                 </select>

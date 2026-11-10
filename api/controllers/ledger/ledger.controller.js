@@ -13,7 +13,10 @@ import { toFixed2 } from "../../utils/currencyHelpers.js";
  */
 export async function getGeneralLedger(req, res) {
     try {
-        const { account_id, from, to } = req.query;
+        const { account_id, from, to, outlet } = req.query;
+        // Filter cabang: id cabang, atau PUSAT untuk baris tanpa cabang
+        const oc = outlet === "PUSAT" ? " AND jl.outlet_id IS NULL" : outlet ? " AND jl.outlet_id = ?" : "";
+        const op = outlet && outlet !== "PUSAT" ? [Number(outlet)] : [];
 
         if (!account_id) {
             return res.status(400).json({ message: "Pilih akun finansial terlebih dahulu." });
@@ -45,9 +48,9 @@ export async function getGeneralLedger(req, res) {
        FROM tr_journal_lines jl
        JOIN tr_journal_entries je ON jl.entry_id = je.id
        WHERE jl.account_id = ?
-         AND je.status = 'POSTED'
-         AND je.entry_date < ?`,
-            [account_id, fromDate]
+         AND je.status IN ('POSTED','REVERSED')
+         AND je.entry_date < ?${oc}`,
+            [account_id, fromDate, ...op]
         );
 
         const debitPrior = Number(priorRows[0].total_debit_prior) || 0;
@@ -71,15 +74,17 @@ export async function getGeneralLedger(req, res) {
          jl.line_no,
          jl.debit,
          jl.credit,
-         jl.memo
+         jl.memo,
+         jl.outlet_id,
+         je.source_type
        FROM tr_journal_lines jl
        JOIN tr_journal_entries je ON jl.entry_id = je.id
        WHERE jl.account_id = ?
-         AND je.status = 'POSTED'
+         AND je.status IN ('POSTED','REVERSED')
          AND je.entry_date >= ?
-         AND je.entry_date <= ?
+         AND je.entry_date <= ?${oc}
        ORDER BY je.entry_date ASC, je.id ASC, jl.line_no ASC`,
-            [account_id, fromDate, toDate]
+            [account_id, fromDate, toDate, ...op]
         );
 
         // 4. Hitung Saldo Berjalan (Running Balance)
@@ -118,6 +123,7 @@ export async function getGeneralLedger(req, res) {
                 period: {
                     from: fromDate,
                     to: toDate,
+                    outlet: outlet || null,
                 },
                 summary: {
                     beginning_balance: beginningBalance,

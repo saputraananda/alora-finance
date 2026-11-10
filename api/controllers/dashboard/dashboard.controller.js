@@ -7,6 +7,27 @@ import { toFixed2 } from "../../utils/currencyHelpers.js";
 // ════════════════════════════════════════════════════════════════════════════
 
 
+// ── Periode cutoff Waschen: 26 bulan sebelumnya → 25 bulan berjalan ─────
+const pad2 = (n) => String(n).padStart(2, "0");
+
+export function cutoffRange(year, month) {
+    const sy = month === 1 ? year - 1 : year;
+    const sm = month === 1 ? 12 : month - 1;
+    return { start: `${sy}-${pad2(sm)}-26`, end: `${year}-${pad2(month)}-25` };
+}
+
+export function shiftMonth(year, month, delta) {
+    const d = new Date(Date.UTC(year, month - 1 + delta, 1));
+    return [d.getUTCFullYear(), d.getUTCMonth() + 1];
+}
+
+// Hari ini (WIB) → periode cutoff yang sedang berjalan
+export function currentCutoffMonth() {
+    const [y, m, d] = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date()).split("-").map(Number);
+    const [yy, mm] = d >= 26 ? shiftMonth(y, m, 1) : [y, m];
+    return { year: yy, month: mm };
+}
+
 /**
  * GET /api/finance-ho/dashboard
  * Ringkasan Eksekutif Keuangan:
@@ -17,15 +38,19 @@ import { toFixed2 } from "../../utils/currencyHelpers.js";
  */
 export async function getFinanceDashboard(req, res) {
     try {
-        const now = new Date();
-        const year = parseInt(req.query.year, 10) || now.getFullYear();
-        const month = parseInt(req.query.month, 10) || (now.getMonth() + 1);
+        // Periode mengikuti cutoff Waschen: tanggal 26 bulan lalu s/d 25 bulan berjalan
+        const cur = currentCutoffMonth();
+        const year = parseInt(req.query.year, 10) || cur.year;
+        const month = parseInt(req.query.month, 10) || cur.month;
 
         const pad = (n) => String(n).padStart(2, "0");
-        const periodStart = `${year}-${pad(month)}-01`;
-        const nextMonthDate = new Date(Date.UTC(year, month, 1));
-        const lastDayDate = new Date(nextMonthDate.getTime() - 1);
-        const periodEnd = `${year}-${pad(month)}-${pad(lastDayDate.getUTCDate())}`;
+        const { start: periodStart, end: periodEnd } = cutoffRange(year, month);
+        const budgetPeriod = `${year}-${pad(month)}-01`; // anggaran disimpan per bulan (tanggal 1)
+
+        // Filter cabang (opsional) — memakai kolom outlet_id pada baris jurnal
+        const outletId = req.query.outlet ? Number(req.query.outlet) : null;
+        const oc = outletId ? " AND jl.outlet_id = ?" : "";
+        const op = outletId ? [outletId] : [];
 
         // 1. Total Pendapatan (Bulan Ini)
         const [revRows] = await pool.query(
@@ -34,10 +59,10 @@ export async function getFinanceDashboard(req, res) {
        FROM tr_journal_lines jl
        JOIN tr_journal_entries je ON jl.entry_id = je.id
        JOIN mst_coa a ON jl.account_id = a.id
-       WHERE je.status = 'POSTED'
+       WHERE je.status IN ('POSTED','REVERSED')
          AND a.type = 'PENDAPATAN'
-         AND je.entry_date >= ? AND je.entry_date <= ?`,
-            [periodStart, periodEnd]
+         AND je.entry_date >= ? AND je.entry_date <= ?${oc}`,
+            [periodStart, periodEnd, ...op]
         );
         const totalRevenue = toFixed2(revRows[0]?.total_revenue || 0);
 
@@ -48,10 +73,10 @@ export async function getFinanceDashboard(req, res) {
        FROM tr_journal_lines jl
        JOIN tr_journal_entries je ON jl.entry_id = je.id
        JOIN mst_coa a ON jl.account_id = a.id
-       WHERE je.status = 'POSTED'
+       WHERE je.status IN ('POSTED','REVERSED')
          AND a.type = 'BEBAN'
-         AND je.entry_date >= ? AND je.entry_date <= ?`,
-            [periodStart, periodEnd]
+         AND je.entry_date >= ? AND je.entry_date <= ?${oc}`,
+            [periodStart, periodEnd, ...op]
         );
         const totalExpense = toFixed2(expRows[0]?.total_expense || 0);
 
@@ -67,7 +92,7 @@ export async function getFinanceDashboard(req, res) {
        JOIN mst_coa a ON b.account_id = a.id
        WHERE a.type = 'BEBAN'
          AND b.period = ?`,
-            [periodStart]
+            [budgetPeriod]
         );
         const totalBudget = toFixed2(budgetRows[0]?.total_budget || 0);
         const budgetUsedPercent = totalBudget > 0 ? toFixed2((totalExpense / totalBudget) * 100) : 0;
@@ -85,7 +110,7 @@ export async function getFinanceDashboard(req, res) {
        FROM tr_journal_lines jl
        JOIN tr_journal_entries je ON jl.entry_id = je.id
        JOIN mst_coa a ON jl.account_id = a.id
-       WHERE je.status = 'POSTED'
+       WHERE je.status IN ('POSTED','REVERSED')
          AND a.type = 'ASET'
          AND (LOWER(a.name) LIKE '%kas%' OR LOWER(a.name) LIKE '%bank%' OR a.code LIKE '11%')
          AND je.entry_date <= ?`,
@@ -94,21 +119,21 @@ export async function getFinanceDashboard(req, res) {
         const totalCash = toFixed2(cashRows[0]?.total_cash || 0);
 
         // 6. Tren 6 Bulan Terakhir
-        const trendStart = new Date(Date.UTC(year, month - 6, 1)).toISOString().split("T")[0];
+        const trendStart = cutoffRange(...shiftMonth(year, month, -5)).start;
         const [trendRows] = await pool.query(
             `SELECT 
-         DATE_FORMAT(je.entry_date, '%Y-%m') AS ym,
+         DATE_FORMAT(IF(DAY(je.entry_date) >= 26, DATE_ADD(DATE_FORMAT(je.entry_date, '%Y-%m-01'), INTERVAL 1 MONTH), je.entry_date), '%Y-%m') AS ym,
          COALESCE(SUM(CASE WHEN a.type = 'PENDAPATAN' THEN jl.credit - jl.debit ELSE 0 END), 0) AS revenue,
          COALESCE(SUM(CASE WHEN a.type = 'BEBAN' THEN jl.debit - jl.credit ELSE 0 END), 0) AS expense
        FROM tr_journal_lines jl
        JOIN tr_journal_entries je ON jl.entry_id = je.id
        JOIN mst_coa a ON jl.account_id = a.id
-       WHERE je.status = 'POSTED'
+       WHERE je.status IN ('POSTED','REVERSED')
          AND a.type IN ('PENDAPATAN', 'BEBAN')
-         AND je.entry_date >= ? AND je.entry_date <= ?
+         AND je.entry_date >= ? AND je.entry_date <= ?${oc}
        GROUP BY ym
        ORDER BY ym ASC`,
-            [trendStart, periodEnd]
+            [trendStart, periodEnd, ...op]
         );
 
         const trendMap = new Map();
@@ -152,14 +177,14 @@ export async function getFinanceDashboard(req, res) {
        JOIN tr_journal_lines jl ON jl.account_id = a.id
        JOIN tr_journal_entries je ON jl.entry_id = je.id
        LEFT JOIN tr_budgets b ON b.account_id = a.id AND b.period = ?
-       WHERE je.status = 'POSTED'
+       WHERE je.status IN ('POSTED','REVERSED')
          AND a.type = 'BEBAN'
-         AND je.entry_date >= ? AND je.entry_date <= ?
+         AND je.entry_date >= ? AND je.entry_date <= ?${oc}
        GROUP BY a.id, a.code, a.name, b.amount
        HAVING actual_amount > 0
        ORDER BY actual_amount DESC
        LIMIT 6`,
-            [periodStart, periodStart, periodEnd]
+            [budgetPeriod, periodStart, periodEnd, ...op]
         );
 
         const topExpenses = topExpRows.map((item) => {
@@ -191,7 +216,7 @@ export async function getFinanceDashboard(req, res) {
          COUNT(jl.id) AS total_lines
        FROM tr_journal_entries je
        LEFT JOIN tr_journal_lines jl ON je.id = jl.entry_id
-       WHERE je.status = 'POSTED'
+       WHERE je.status IN ('POSTED','REVERSED')
        GROUP BY je.id
        ORDER BY je.entry_date DESC, je.id DESC
        LIMIT 5`
@@ -203,6 +228,7 @@ export async function getFinanceDashboard(req, res) {
                     year,
                     month,
                     start_date: periodStart,
+                    outlet_id: outletId,
                     end_date: periodEnd,
                 },
                 kpis: {
