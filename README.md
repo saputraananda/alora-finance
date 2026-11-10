@@ -1,6 +1,6 @@
-# Alora FInance
+# Alora Finance 
 
-Aplikasi **HO Finance** Alora
+Aplikasi **HO Finance** Alora 
 
 ## Struktur
 
@@ -24,10 +24,10 @@ Folder dibagi **per fitur** (mengikuti pola waschen-mobile). Acuan konvensi kode
 │   │   ├── auth/          # login
 │   │   ├── dashboard/
 │   │   ├── rekonsiliasi/
-│   │   ├── journal/
-│   │   ├── general-ledger/
+│   │   ├── jurnal-umum/
+│   │   ├── buku-besar/
 │   │   ├── coa/
-│   │   └── budgets/
+│   │   └── anggaran-beban/
 │   ├── components/    # FinanceLayout (sidebar + topbar), RouteGuards,
 │   │                  # DetailJurnalModal, ModalFormAkun (dipakai lintas halaman)
 │   └── lib/api.js     # wrapper fetch + token
@@ -80,3 +80,6 @@ npm run dev
 | `npm run dev:client` | Frontend saja (Vite) |
 | `npm run build` | Build frontend |
 | `npm start` | Jalankan server (production) |
+
+## Database
+Skema (CREATE TABLE) dan data awal disimpan di repo privat terpisah **alfi-database**, bukan di repo ini. Server tidak membuat tabel sendiri; jalankan `schema.sql` lalu `seed.sql` dari repo tersebut pada database kosong.

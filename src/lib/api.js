@@ -1,12 +1,26 @@
 // Wrapper fetch ke backend Alfi. Semua path dipanggil tanpa prefix "/api"
 // (mis. api("/finance-ho/accounts")), prefix ditambahkan di sini.
-const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+const API_BASE = (
+  typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL
+    ? import.meta.env.VITE_API_URL
+    : ''
+).replace(/\/$/, '');
 
-export const getToken = () => localStorage.getItem('token');
+export const getToken = () => {
+  const token = localStorage.getItem('token');
+  if (!token || token === 'null' || token === 'undefined' || token.trim() === '') {
+    return null;
+  }
+  return token;
+};
 
 export function clearSession() {
-  localStorage.removeItem('token');
-  localStorage.removeItem('user');
+  try {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    sessionStorage.removeItem('token');
+    sessionStorage.removeItem('user');
+  } catch {}
 }
 
 export async function api(path, options = {}) {
@@ -23,9 +37,11 @@ export async function api(path, options = {}) {
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: 'Network error' }));
     // Token tidak valid / kadaluwarsa -> kembali ke login
-    if ((res.status === 401 || res.status === 403) && token) {
+    if (res.status === 401 || res.status === 403) {
       clearSession();
-      window.location.replace('/login');
+      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+        window.location.replace('/login');
+      }
     }
     throw new Error(err.message || 'Request failed');
   }

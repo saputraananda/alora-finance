@@ -20,3 +20,8 @@ dist-ssr/
 *.sln
 *.sw?
 /aiAgent
+uploads/
+
+# DDL / skema database disimpan di repo privat terpisah (alfi-database), jangan masuk repo ini
+database/
+aiAgent/DDL_alfi.sql

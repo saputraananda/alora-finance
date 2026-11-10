@@ -50,6 +50,17 @@ export const alfiPool = mysql.createPool({
   database: process.env.DB_NAME_ALFI,
 });
 
+// DB POS my-waschen — HANYA DIBACA oleh Alfi (sumber revenue, kas kecil, setoran).
+// Pakai user MySQL dengan izin SELECT saja. Jangan pernah menulis ke pool ini.
+export const myWaschenPool = mysql.createPool({
+  ...basePoolOptions,
+  host: process.env.DB_HOST_MY_WASCHEN,
+  port: parseInt(process.env.DB_PORT_MY_WASCHEN || '3306'),
+  user: process.env.DB_USER_MY_WASCHEN,
+  password: process.env.DB_PASS_MY_WASCHEN,
+  database: process.env.DB_NAME_MY_WASCHEN,
+});
+
 // Alias: controller finance memakai `pool` = DB Alfi
 export const pool = alfiPool;
 
@@ -67,6 +78,17 @@ export async function safeQuery(sql, params) {
   }
 }
 
+// Daftar outlet/cabang dari POS my-waschen (id → nama). Gagal koneksi → peta kosong.
+export async function getOutlets() {
+  try {
+    const [rows] = await myWaschenPool.query('SELECT id, name, is_event FROM mst_outlet ORDER BY id');
+    return rows.map((r) => ({ id: Number(r.id), name: r.name, is_event: Number(r.is_event) === 1 }));
+  } catch (err) {
+    console.error('[getOutlets] lookup outlet POS gagal:', err.message);
+    return [];
+  }
+}
+
 // Ambil nama user dari DB SuperApp (mainPool). Mengembalikan Map<id, name>.
 // Gagal koneksi DB SuperApp tidak boleh merusak halaman: nama dikosongkan saja.
 export async function getUserNames(ids = []) {
@@ -81,3 +103,4 @@ export async function getUserNames(ids = []) {
   }
   return map;
 }
+
