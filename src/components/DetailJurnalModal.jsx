@@ -45,7 +45,7 @@ export const JOURNAL_STATUS = {
   REVERSED: { label: "Dibalik", cls: "bg-rose-50 text-rose-700 border-rose-200" },
 };
 
-const SOURCE_LABEL = { POS: "POS", MANUAL: "Manual", REKONSILIASI: "Rekonsiliasi", REKON_BANK: "Bank (biaya admin)", ALOKASI: "Alokasi biaya pusat" };
+const SOURCE_LABEL = { POS: "POS", MANUAL: "Manual", REKONSILIASI: "Rekonsiliasi", REKON_BANK: "Bank (biaya admin)", ALOKASI: "Alokasi biaya pusat", PENGAJUAN: "Pengajuan (Pembelian)" };
 
 // ════════════════════════════════════════════════════════════════════════════
 // MODAL DETAIL JURNAL — lihat, ubah draft, ajukan, setujui/tolak, balik

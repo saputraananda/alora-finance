@@ -16,6 +16,9 @@ import {
   HiOutlineCalculator,
   HiOutlineChartBar,
   HiOutlineBanknotes,
+  HiOutlineShoppingCart,
+  HiOutlineCreditCard,
+  HiOutlineTag,
   HiOutlineScale,
   HiOutlineReceiptPercent,
   HiOutlineDocumentChartBar,
@@ -46,6 +49,17 @@ const OPERATIONAL_SECTIONS = [
     icon: HiOutlineUsers,
     items: [
       { to: "/finance-ho/pelanggan/deposit", icon: HiOutlineUsers, label: "Deposit Member", description: "Saldo POS vs akun Deposit", end: false },
+    ],
+  },
+  {
+    id: "pembelian",
+    label: "Pembelian",
+    icon: HiOutlineShoppingCart,
+    items: [
+      { to: "/finance-ho/pembelian/pengajuan", icon: HiOutlineShoppingCart, label: "Pengajuan", description: "Antrean & semua pengajuan", end: false },
+      { to: "/finance-ho/pembelian/pembayaran", icon: HiOutlineBanknotes, label: "Pembayaran", description: "Menunggu bayar", end: false },
+      { to: "/finance-ho/pembelian/kredit", icon: HiOutlineCreditCard, label: "Kredit & Cicilan", description: "Hutang & jatuh tempo", end: false },
+      { to: "/finance-ho/pembelian/klasifikasi", icon: HiOutlineTag, label: "Klasifikasi", description: "Kategori biaya pengajuan", end: false },
     ],
   },
   {

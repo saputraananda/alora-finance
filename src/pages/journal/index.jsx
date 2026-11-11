@@ -35,6 +35,7 @@ const SOURCE_BADGE = {
   SETTLEMENT: { label: "Settlement", cls: "bg-violet-50 text-violet-700 border-violet-200" },
   KAS_KECIL: { label: "Kas kecil", cls: "bg-amber-50 text-amber-700 border-amber-200" },
   REKON_BANK: { label: "Bank", cls: "bg-cyan-50 text-cyan-700 border-cyan-200" },
+  PENGAJUAN: { label: "Pengajuan", cls: "bg-orange-50 text-orange-700 border-orange-200" },
   ALOKASI: { label: "Alokasi", cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" },
 };
 
@@ -245,6 +246,7 @@ export default function JurnalUmum() {
                   <option value="POS">POS</option>
                   <option value="REKONSILIASI">Rekonsiliasi</option>
                   <option value="REKON_BANK">Bank (biaya admin)</option>
+                  <option value="PENGAJUAN">Pengajuan</option>
                   <option value="ALOKASI">Alokasi biaya pusat</option>
                   <option value="MANUAL">Manual</option>
                 </select>

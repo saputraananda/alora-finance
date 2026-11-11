@@ -17,6 +17,10 @@ import LaporanKeuangan from './pages/reports';
 import DepositMember from './pages/customers/DepositMember';
 import TutupBuku from './pages/closing';
 import AsetTetap from './pages/fixed-assets';
+import Pengajuan from './pages/purchasing/Pengajuan';
+import Pembayaran from './pages/purchasing/Pembayaran';
+import Kredit from './pages/purchasing/Kredit';
+import Klasifikasi from './pages/purchasing/Klasifikasi';
 
 function App() {
   return (
@@ -39,6 +43,11 @@ function App() {
               <Route path="/finance-ho/laporan" element={<LaporanKeuangan />} />
               <Route path="/finance-ho/pelanggan/deposit" element={<DepositMember />} />
               <Route path="/finance-ho/tutup-buku" element={<TutupBuku />} />
+              <Route path="/finance-ho/pembelian" element={<Navigate to="/finance-ho/pembelian/pengajuan" replace />} />
+              <Route path="/finance-ho/pembelian/pengajuan" element={<Pengajuan />} />
+              <Route path="/finance-ho/pembelian/pembayaran" element={<Pembayaran />} />
+              <Route path="/finance-ho/pembelian/kredit" element={<Kredit />} />
+              <Route path="/finance-ho/pembelian/klasifikasi" element={<Klasifikasi />} />
               <Route path="/finance-ho/aset-tetap" element={<AsetTetap />} />
               <Route path="/finance-ho/rekonsiliasi" element={<Rekonsiliasi />} />
               <Route path="/finance-ho/jurnal-umum" element={<JurnalUmum />} />

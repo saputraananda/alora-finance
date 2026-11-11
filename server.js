@@ -17,6 +17,7 @@ import financeReportsRoutes from './api/routes/reports/reports.routes.js';
 import financeCustomersRoutes from './api/routes/customers/customers.routes.js';
 import financeClosingRoutes from './api/routes/closing/closing.routes.js';
 import financeAssetsRoutes from './api/routes/assets/assets.routes.js';
+import financePurchasingRoutes from './api/routes/purchasing/purchasing.routes.js';
 import { startPosSyncScheduler } from './api/jobs/posSync.js';
 
 // Resolve directory paths in ES module
@@ -50,6 +51,7 @@ app.use('/api/finance-ho', financeReportsRoutes);
 app.use('/api/finance-ho', financeCustomersRoutes);
 app.use('/api/finance-ho', financeClosingRoutes);
 app.use('/api/finance-ho', financeAssetsRoutes);
+app.use('/api/finance-ho', financePurchasingRoutes);
 
 // Serve static assets in production
 if (process.env.NODE_ENV === 'production') {

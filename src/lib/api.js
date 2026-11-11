@@ -36,8 +36,9 @@ export async function api(path, options = {}) {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: 'Network error' }));
-    // Token tidak valid / kadaluwarsa -> kembali ke login
-    if (res.status === 401 || res.status === 403) {
+    // Token tidak valid / kadaluwarsa -> kembali ke login.
+    // 403 dengan code NO_ACCESS = login sah tetapi tidak punya hak menu itu: JANGAN dikeluarkan.
+    if (res.status === 401 || (res.status === 403 && err.code !== 'NO_ACCESS')) {
       clearSession();
       if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
         window.location.replace('/login');
