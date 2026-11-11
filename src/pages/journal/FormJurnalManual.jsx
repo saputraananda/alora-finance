@@ -36,17 +36,50 @@ const inputCls =
   "w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10";
 
 // ── Pilihan akun yang bisa dicari dengan kode atau nama ─────────────────
+// Daftar dirender lewat portal (position: fixed) supaya tidak terpotong oleh overflow tabel/modal,
+// dan mengikuti posisi kolom saat halaman di-scroll. Bila ruang di bawah kurang, daftar naik ke atas.
 function AccountPicker({ value, accounts, onChange }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
+  const [pos, setPos] = useState(null);
   const ref = useRef(null);
+  const listRef = useRef(null);
   const selected = accounts.find((a) => String(a.id) === String(value));
 
   useEffect(() => {
-    const close = (e) => ref.current && !ref.current.contains(e.target) && setOpen(false);
+    const close = (e) => {
+      if (ref.current?.contains(e.target) || listRef.current?.contains(e.target)) return;
+      setOpen(false);
+    };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
   }, []);
+
+  // Hitung posisi daftar dari kotak input; perbarui saat scroll/resize
+  useEffect(() => {
+    if (!open) return undefined;
+    const place = () => {
+      const el = ref.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const maxH = 224; // 14rem
+      const below = window.innerHeight - r.bottom - 12;
+      const up = below < Math.min(maxH, 160) && r.top > below;
+      setPos({
+        left: r.left,
+        width: r.width,
+        maxHeight: Math.max(120, Math.min(maxH, up ? r.top - 12 : below)),
+        ...(up ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }),
+      });
+    };
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
+  }, [open]);
 
   const list = useMemo(() => {
     const t = q.trim().toLowerCase();
@@ -69,32 +102,39 @@ function AccountPicker({ value, accounts, onChange }) {
         }}
         className={inputCls}
       />
-      {open && (
-        <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-56 overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-xl">
-          {list.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-slate-400">Akun tidak ditemukan</p>
-          ) : (
-            list.map((a) => (
-              <button
-                key={a.id}
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => {
-                  onChange(a.id);
-                  setOpen(false);
-                }}
-                className={cn(
-                  "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-emerald-50",
-                  String(a.id) === String(value) && "bg-emerald-50"
-                )}
-              >
-                <span className="w-14 shrink-0 font-mono font-bold text-slate-800">{a.code}</span>
-                <span className="text-slate-600">{a.name}</span>
-              </button>
-            ))
-          )}
-        </div>
-      )}
+      {open &&
+        pos &&
+        createPortal(
+          <div
+            ref={listRef}
+            style={{ position: "fixed", left: pos.left, width: pos.width, top: pos.top, bottom: pos.bottom, maxHeight: pos.maxHeight }}
+            className="z-[10001] overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-xl"
+          >
+            {list.length === 0 ? (
+              <p className="px-3 py-2 text-xs text-slate-400">Akun tidak ditemukan</p>
+            ) : (
+              list.map((a) => (
+                <button
+                  key={a.id}
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    onChange(a.id);
+                    setOpen(false);
+                  }}
+                  className={cn(
+                    "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-emerald-50",
+                    String(a.id) === String(value) && "bg-emerald-50"
+                  )}
+                >
+                  <span className="w-14 shrink-0 font-mono font-bold text-slate-800">{a.code}</span>
+                  <span className="text-slate-600">{a.name}</span>
+                </button>
+              ))
+            )}
+          </div>,
+          document.body
+        )}
     </div>
   );
 }
