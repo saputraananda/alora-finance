@@ -26,6 +26,7 @@ import {
 } from "react-icons/hi2";
 
 import { clearSession } from "../lib/api";
+import ErrorBoundary from "./ui/ErrorBoundary";
 import { useAuth } from "../context/AuthContext";
 
 function cn(...classes) {
@@ -453,7 +454,9 @@ export default function FinanceLayout() {
 
         {/* Content Outlet */}
         <main className="flex-1">
-          <Outlet />
+          <ErrorBoundary key={pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </main>
       </div>
     </div>

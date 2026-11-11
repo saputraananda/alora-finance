@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { HiOutlineArrowPath, HiOutlineDocumentChartBar, HiOutlinePrinter, HiOutlineTableCells } from "react-icons/hi2";
 import { api } from "../../lib/api";
@@ -279,6 +279,10 @@ export default function LaporanKeuangan() {
   const [outlets, setOutlets] = useState([]);
   const [compare, setCompare] = useState(true);
   const [data, setData] = useState(null);
+  // Jenis laporan milik `data`. Tanpa ini, saat jenis diganti data lama (bentuk laporan lain) sempat
+  // dirender oleh komponen laporan baru dan membuat halaman putih.
+  const [dataType, setDataType] = useState(null);
+  const seq = useRef(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -288,6 +292,8 @@ export default function LaporanKeuangan() {
   }, []);
 
   const load = useCallback(async () => {
+    const reqType = type;
+    const my = ++seq.current;
     setLoading(true);
     setError("");
     try {
@@ -298,18 +304,25 @@ export default function LaporanKeuangan() {
         qs.set("to", period.to);
       }
       if (outlet) qs.set("outlet", outlet);
-      setData(await api(`/finance-ho/reports/${type}?${qs}`));
+      const res = await api(`/finance-ho/reports/${reqType}?${qs}`);
+      if (my !== seq.current) return; // jawaban lama, sudah ada permintaan yang lebih baru
+      setData(res);
+      setDataType(reqType);
     } catch (e) {
+      if (my !== seq.current) return;
       setError(e.message);
       setData(null);
+      setDataType(null);
     } finally {
-      setLoading(false);
+      if (my === seq.current) setLoading(false);
     }
   }, [type, period, outlet]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  const ready = !!data && dataType === type;
 
   const range = useMemo(() => (data?.period ? { from: data.period.from, to: data.period.to } : null), [data]);
   const glLink = (accountId) => {
@@ -371,7 +384,7 @@ export default function LaporanKeuangan() {
             <div>
               <h2 className="text-sm font-extrabold text-slate-800">{active.label}</h2>
               <p className="text-[11px] text-slate-400">
-                {outletName} · {type === "balance-sheet" || type === "aging" ? `per ${dmy(type === "aging" ? data?.as_of : data?.as_of)}` : period.custom ? periodText(period) : `${cutoffMonthLabel(month)} (${cutoffRangeLabel(month)})`}
+                {outletName} · {type === "balance-sheet" || type === "aging" ? `per ${dmy(ready ? data.as_of : null)}` : period.custom ? periodText(period) : `${cutoffMonthLabel(month)} (${cutoffRangeLabel(month)})`}
               </p>
             </div>
             <div className="no-print flex items-center gap-2">
@@ -383,18 +396,18 @@ export default function LaporanKeuangan() {
               <button type="button" onClick={load} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:border-emerald-400 hover:text-emerald-700">
                 <HiOutlineArrowPath className={cn("h-4 w-4", loading && "animate-spin")} /> Muat ulang
               </button>
-              <button type="button" disabled={!data} onClick={() => downloadCsv(`${type}-${month}.csv`, toRows(type, data, compare))} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:border-emerald-400 hover:text-emerald-700 disabled:opacity-40">
+              <button type="button" disabled={!ready} onClick={() => downloadCsv(`${type}-${month}.csv`, toRows(type, data, compare))} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:border-emerald-400 hover:text-emerald-700 disabled:opacity-40">
                 <HiOutlineTableCells className="h-4 w-4" /> Excel
               </button>
-              <button type="button" disabled={!data} onClick={() => window.print()} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:border-emerald-400 hover:text-emerald-700 disabled:opacity-40">
+              <button type="button" disabled={!ready} onClick={() => window.print()} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:border-emerald-400 hover:text-emerald-700 disabled:opacity-40">
                 <HiOutlinePrinter className="h-4 w-4" /> PDF
               </button>
             </div>
           </div>
 
           {error && <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{error}</p>}
-          {loading && !data && <div className="rounded-2xl border border-slate-200 bg-white py-12 text-center text-xs text-slate-400">Menyusun laporan...</div>}
-          {data && (
+          {loading && !ready && <div className="rounded-2xl border border-slate-200 bg-white py-12 text-center text-xs text-slate-400">Menyusun laporan...</div>}
+          {ready && (
             <div className={cn(loading && "opacity-60 transition")}>
               {type === "profit-loss" && <ProfitLoss d={data} compare={compare} glLink={glLink} />}
               {type === "balance-sheet" && <BalanceSheet d={data} />}
