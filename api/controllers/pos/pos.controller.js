@@ -274,7 +274,7 @@ function lineView(l) {
   };
 }
 
-async function loadBatches(date) {
+export async function loadBatches(date) {
   const [rows] = await pool.query(
     `SELECT b.*, je.entry_no, je.status AS journal_status
      FROM tr_pos_batch b LEFT JOIN tr_journal_entries je ON je.id = b.journal_id
@@ -286,7 +286,7 @@ async function loadBatches(date) {
 
 // Status batch: KOSONG · VALID (siap posting) · GAGAL (gagal validasi) · TERKUNCI ·
 //               DIPOSTING · BERUBAH (data POS berubah setelah diposting) · DIBALIK
-function statusOf(row, batch, locked = false) {
+export function statusOf(row, batch, locked = false) {
   if (!batch || batch.journal_status === "REVERSED") {
     const empty = row.revenue === 0 && row.payments_total === 0 && !row.unmapped.length && !row.issues.length;
     if (!batch && empty) return "KOSONG";

@@ -17,7 +17,7 @@ import {
   recentCutoffKeys,
 } from "../../lib/cutoff";
 import PeriodFilter, { periodRange, periodText } from "../../components/ui/PeriodFilter";
-import FormJurnalManual from "./FormJurnalManual";
+import { useLocation, useNavigate } from "react-router-dom";
 import DetailJurnalModal, { JOURNAL_STATUS } from "../../components/DetailJurnalModal";
 
 function cn(...classes) {
@@ -67,12 +67,13 @@ export default function JurnalUmum() {
   const month = period.month;
   const [outletFilter, setOutletFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState("");
+  const [kindFilter, setKindFilter] = useState(""); // "" | PENDAPATAN | PENGELUARAN
   const [statusFilter, setStatusFilter] = useState("");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
 
-  const [formOpen, setFormOpen] = useState(false);
-  const [editId, setEditId] = useState(null);
+  const navigate = useNavigate();
+  const location = useLocation();
   const [detailId, setDetailId] = useState(null);
   const [toastMessage, setToastMessage] = useState("");
   const [exporting, setExporting] = useState(false);
@@ -81,6 +82,16 @@ export default function JurnalUmum() {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(""), 4000);
   };
+
+  // Pesan sukses dari halaman form jurnal manual (dikirim lewat state navigasi)
+  useEffect(() => {
+    const msg = location.state?.toast;
+    if (msg) {
+      showToast(msg);
+      navigate(location.pathname, { replace: true, state: null });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 350);
@@ -94,10 +105,11 @@ export default function JurnalUmum() {
       if (debouncedSearch.trim()) qs.set("q", debouncedSearch.trim());
       if (statusFilter) qs.set("status", statusFilter);
       if (sourceFilter) qs.set("source", sourceFilter);
+      if (kindFilter) qs.set("kind", kindFilter);
       if (outletFilter) qs.set("outlet", outletFilter);
       return qs;
     },
-    [period, debouncedSearch, statusFilter, sourceFilter, outletFilter]
+    [period, debouncedSearch, statusFilter, sourceFilter, kindFilter, outletFilter]
   );
 
   const fetchJournals = useCallback(
@@ -176,19 +188,6 @@ export default function JurnalUmum() {
         </div>
       )}
 
-      <FormJurnalManual
-        open={formOpen}
-        editId={editId}
-        onClose={() => {
-          setFormOpen(false);
-          setEditId(null);
-        }}
-        onSuccess={(result) => {
-          showToast(`${result.message} (${result.entry_no})`);
-          fetchJournals(1);
-        }}
-      />
-
       <DetailJurnalModal
         open={Boolean(detailId)}
         journalId={detailId}
@@ -200,8 +199,7 @@ export default function JurnalUmum() {
         }}
         onEdit={(id) => {
           setDetailId(null);
-          setEditId(id);
-          setFormOpen(true);
+          navigate(`/finance-ho/jurnal-umum/${id}/ubah`);
         }}
       />
 
@@ -239,6 +237,23 @@ export default function JurnalUmum() {
           <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
             {/* Bar filter */}
             <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 p-3 sm:p-4">
+              <div className="inline-flex rounded-xl border border-slate-200 bg-white p-0.5">
+                {[
+                  { key: "", label: "Semua", hint: "Semua jenis transaksi" },
+                  { key: "PENDAPATAN", label: "Pendapatan", hint: "Jurnal yang memuat akun pendapatan (termasuk otomatis dari POS)" },
+                  { key: "PENGELUARAN", label: "Pengeluaran", hint: "Jurnal yang memuat akun beban (manual, pengajuan, rekonsiliasi, dan lainnya)" },
+                ].map((k) => (
+                  <button
+                    key={k.key}
+                    title={k.hint}
+                    type="button"
+                    onClick={() => setKindFilter(k.key)}
+                    className={`whitespace-nowrap rounded-[10px] px-3 py-1.5 text-xs font-semibold transition ${kindFilter === k.key ? "bg-emerald-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50"}`}
+                  >
+                    {k.label}
+                  </button>
+                ))}
+              </div>
               <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-500">
                 Sumber:
                 <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)} className={selectCls}>
@@ -273,10 +288,7 @@ export default function JurnalUmum() {
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  setEditId(null);
-                  setFormOpen(true);
-                }}
+                onClick={() => navigate("/finance-ho/jurnal-umum/baru")}
                 className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm shadow-emerald-600/20 transition hover:bg-emerald-700"
               >
                 <HiOutlinePlus className="h-4 w-4 stroke-[2.5]" />

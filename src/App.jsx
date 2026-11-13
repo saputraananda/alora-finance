@@ -7,6 +7,7 @@ import FinanceLayout from './components/FinanceLayout.jsx';
 import DashboardFinance from './pages/dashboard';
 import Rekonsiliasi from './pages/rekonsiliasi';
 import JurnalUmum from './pages/journal';
+import JurnalManual from './pages/journal/FormJurnalManual';
 import BukuBesar from './pages/general-ledger';
 import COA from './pages/coa';
 import AnggaranBeban from './pages/budgets';
@@ -51,6 +52,8 @@ function App() {
               <Route path="/finance-ho/aset-tetap" element={<AsetTetap />} />
               <Route path="/finance-ho/rekonsiliasi" element={<Rekonsiliasi />} />
               <Route path="/finance-ho/jurnal-umum" element={<JurnalUmum />} />
+              <Route path="/finance-ho/jurnal-umum/baru" element={<JurnalManual />} />
+              <Route path="/finance-ho/jurnal-umum/:id/ubah" element={<JurnalManual />} />
               <Route path="/finance-ho/buku-besar" element={<BukuBesar />} />
               <Route path="/finance-ho/coa" element={<COA />} />
               <Route path="/finance-ho/anggaran-beban" element={<AnggaranBeban />} />

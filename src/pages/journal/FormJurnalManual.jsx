@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import {
+  HiOutlineArrowLeft,
   HiOutlineBookOpen,
   HiOutlinePlus,
   HiOutlineCheckCircle,
@@ -12,6 +14,7 @@ import {
   HiOutlineSparkles,
 } from "react-icons/hi2";
 import { api, getToken } from "../../lib/api";
+import DetailAkunDialog from "./DetailAkunDialog";
 
 function cn(...classes) {
   return classes.filter(Boolean).join(" ");
@@ -30,7 +33,6 @@ function todayLocal() {
   return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
 }
 
-const emptyLine = () => ({ account_id: "", outlet_id: "", debit: "", credit: "", memo: "" });
 
 const inputCls =
   "w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10";
@@ -38,7 +40,7 @@ const inputCls =
 // ── Pilihan akun yang bisa dicari dengan kode atau nama ─────────────────
 // Daftar dirender lewat portal (position: fixed) supaya tidak terpotong oleh overflow tabel/modal,
 // dan mengikuti posisi kolom saat halaman di-scroll. Bila ruang di bawah kurang, daftar naik ke atas.
-function AccountPicker({ value, accounts, onChange }) {
+function AccountPicker({ value, accounts, onChange, placeholder = "Cari kode atau nama akun" }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [pos, setPos] = useState(null);
@@ -91,7 +93,7 @@ function AccountPicker({ value, accounts, onChange }) {
       <input
         type="text"
         value={open ? q : selected ? `${selected.code} ${selected.name}` : ""}
-        placeholder="Cari kode atau nama akun"
+        placeholder={placeholder}
         onFocus={() => {
           setOpen(true);
           setQ("");
@@ -140,14 +142,21 @@ function AccountPicker({ value, accounts, onChange }) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// FORM JURNAL MANUAL (Jurnal > Jurnal manual)
-// Props: editId → ubah draft yang sudah ada.
+// HALAMAN JURNAL MANUAL (Jurnal > Jurnal manual)
+//   /finance-ho/jurnal-umum/baru        → jurnal baru
+//   /finance-ho/jurnal-umum/:id/ubah    → ubah draft yang sudah ada
+// Halaman penuh (bukan modal); satu-satunya dialog adalah "Detail Akun" saat mengisi baris.
 // ════════════════════════════════════════════════════════════════════════════
-export default function FormJurnalManual({ open, editId, onClose, onSuccess }) {
+const LIST_PATH = "/finance-ho/jurnal-umum";
+
+export default function FormJurnalManual() {
+  const { id: editId } = useParams();
+  const navigate = useNavigate();
   const [entryDate, setEntryDate] = useState(todayLocal());
   const [description, setDescription] = useState("");
   const [outletId, setOutletId] = useState("");
-  const [lines, setLines] = useState([emptyLine(), emptyLine()]);
+  const [lines, setLines] = useState([]);
+  const [dialog, setDialog] = useState(null); // {index: number | null (baris baru), account_id}
   const [attachment, setAttachment] = useState(null); // {url, name}
   const [uploading, setUploading] = useState(false);
 
@@ -156,7 +165,7 @@ export default function FormJurnalManual({ open, editId, onClose, onSuccess }) {
   const [restricted, setRestricted] = useState([]);
   const [entryNo, setEntryNo] = useState("");
   const [loading, setLoading] = useState(false);
-  const [submitting, setSubmitting] = useState(null); // 'draft' | 'submit'
+  const [submitting, setSubmitting] = useState(null); // 'post' (simpan langsung diposting)
   const [error, setError] = useState("");
   const [seeding, setSeeding] = useState(false);
 
@@ -164,7 +173,8 @@ export default function FormJurnalManual({ open, editId, onClose, onSuccess }) {
     setEntryDate(todayLocal());
     setDescription("");
     setOutletId("");
-    setLines([emptyLine(), emptyLine()]);
+    setLines([]);
+    setDialog(null);
     setAttachment(null);
     setEntryNo("");
     setError("");
@@ -178,7 +188,6 @@ export default function FormJurnalManual({ open, editId, onClose, onSuccess }) {
   }, []);
 
   useEffect(() => {
-    if (!open) return;
     let alive = true;
     setLoading(true);
     setError("");
@@ -197,7 +206,6 @@ export default function FormJurnalManual({ open, editId, onClose, onSuccess }) {
           setLines(
             (j.lines || []).map((l) => ({
               account_id: l.account_id,
-              outlet_id: l.outlet_id ? String(l.outlet_id) : "",
               debit: Number(l.debit) > 0 ? formatNumber(Math.round(l.debit)) : "",
               credit: Number(l.credit) > 0 ? formatNumber(Math.round(l.credit)) : "",
               memo: l.memo || "",
@@ -215,7 +223,7 @@ export default function FormJurnalManual({ open, editId, onClose, onSuccess }) {
     return () => {
       alive = false;
     };
-  }, [open, editId, loadRefs, reset]);
+  }, [editId, loadRefs, reset]);
 
   // Akun kas/piutang/deposit tidak boleh dipakai di jurnal manual
   const selectable = useMemo(() => accounts.filter((a) => !restricted.includes(Number(a.id))), [accounts, restricted]);
@@ -226,7 +234,31 @@ export default function FormJurnalManual({ open, editId, onClose, onSuccess }) {
     return `JM-${y.slice(2)}${m}${d}-NN (otomatis)`;
   }, [entryNo, entryDate]);
 
-  const setLine = (i, patch) => setLines((p) => p.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
+  const accountOf = (id) => accounts.find((a) => String(a.id) === String(id));
+
+  // Nilai awal dialog. Baris yang diubah: isi baris itu. Baris baru: bila jurnal belum seimbang,
+  // sisi diisi lawan dari sisi yang lebih besar dan nominal diisi selisihnya (seperti Accurate).
+  const dialogInitial = () => {
+    const l = dialog?.index != null ? lines[dialog.index] : null;
+    if (!l) {
+      const diff = totals.d - totals.c;
+      const gap = Math.abs(diff) >= 0.005;
+      return { side: gap && diff > 0 ? "credit" : "debit", amount: gap ? formatNumber(Math.round(Math.abs(diff))) : "", memo: "" };
+    }
+    return { side: parseNumber(l.credit) > 0 ? "credit" : "debit", amount: l.credit || l.debit, memo: l.memo };
+  };
+
+  // "Lanjut" di dialog: simpan baris baru atau perbarui baris yang diubah
+  const saveDialog = (v) => {
+    const line = {
+      account_id: dialog.account_id,
+      debit: v.side === "debit" ? v.amount : "",
+      credit: v.side === "credit" ? v.amount : "",
+      memo: v.memo,
+    };
+    setLines((p) => (dialog.index != null ? p.map((l, i) => (i === dialog.index ? line : l)) : [...p, line]));
+    setDialog(null);
+  };
 
   const totals = useMemo(() => {
     let d = 0;
@@ -271,14 +303,14 @@ export default function FormJurnalManual({ open, editId, onClose, onSuccess }) {
   const handleSave = async (action) => {
     setError("");
     if (!description.trim()) return setError("Keterangan jurnal wajib diisi.");
-    if (action === "submit" && !totals.balanced) {
+    if (action !== "draft" && !totals.balanced) {
       return setError("Jurnal belum seimbang atau belum punya minimal 2 baris bernominal.");
     }
     const payloadLines = lines
       .filter((l) => parseNumber(l.debit) > 0 || parseNumber(l.credit) > 0 || l.account_id)
       .map((l) => ({
         account_id: l.account_id ? Number(l.account_id) : null,
-        outlet_id: l.outlet_id ? Number(l.outlet_id) : null,
+        outlet_id: outletId ? Number(outletId) : null, // semua baris mengikuti Cabang di header
         debit: parseNumber(l.debit),
         credit: parseNumber(l.credit),
         memo: l.memo?.trim() || null,
@@ -299,9 +331,7 @@ export default function FormJurnalManual({ open, editId, onClose, onSuccess }) {
         method: editId ? "PUT" : "POST",
         body,
       });
-      onSuccess?.(res);
-      reset();
-      onClose();
+      navigate(LIST_PATH, { state: { toast: `${res.message} (${res.entry_no})` } });
     } catch (e) {
       setError(e.message || "Gagal menyimpan jurnal.");
     } finally {
@@ -321,43 +351,35 @@ export default function FormJurnalManual({ open, editId, onClose, onSuccess }) {
     }
   };
 
-  const cancel = () => {
-    reset();
-    onClose();
-  };
+  const cancel = () => navigate(LIST_PATH);
 
-  if (!open) return null;
-
-  return createPortal(
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4">
-      <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm" onClick={cancel} />
-
-      <div
-        className="relative flex w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-2xl animate-[fadeIn_0.2s_ease-out]"
-        style={{ maxHeight: "94vh" }}
-      >
-        <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-6 py-4">
+  return (
+    <div className="min-h-screen bg-slate-50 py-6 sm:py-8">
+      <div className="mx-auto max-w-screen-xl space-y-4 px-4 sm:px-6 lg:px-8">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={cancel}
+            title="Kembali ke daftar jurnal"
+            className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-700"
+          >
+            <HiOutlineArrowLeft className="h-4 w-4" />
+          </button>
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-emerald-100 bg-emerald-50 text-emerald-700">
               <HiOutlineBookOpen className="h-5 w-5" />
             </div>
             <div>
               <p className="text-[11px] font-semibold text-slate-400">Jurnal</p>
-              <h3 className="text-base font-bold tracking-tight text-slate-800">
-                {editId ? "Ubah draft jurnal manual" : "Jurnal manual"}
-              </h3>
+              <h1 className="text-lg font-extrabold tracking-tight text-slate-800">
+                {editId ? "Ubah jurnal manual (draft)" : "Jurnal manual"}
+              </h1>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={cancel}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
-          >
-            <HiOutlineXMark className="h-5 w-5" />
-          </button>
         </div>
 
-        <div className="flex-1 space-y-5 overflow-y-auto p-6">
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="space-y-5 p-6">
           {error && (
             <div className="flex items-center gap-2.5 rounded-2xl border border-rose-200 bg-rose-50 p-3.5 text-xs font-semibold text-rose-800">
               <HiOutlineExclamationTriangle className="h-5 w-5 shrink-0 text-rose-600" />
@@ -423,98 +445,80 @@ export default function FormJurnalManual({ open, editId, onClose, onSuccess }) {
               <table className="w-full text-left text-xs">
                 <thead className="border-b border-slate-200 bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-500">
                   <tr>
-                    <th className="min-w-[260px] px-3 py-2.5">Akun</th>
-                    <th className="w-36 px-3 py-2.5">Cabang</th>
-                    <th className="min-w-[160px] px-3 py-2.5">Keterangan baris</th>
+                    <th className="w-28 px-3 py-2.5">Kode #</th>
+                    <th className="min-w-[220px] px-3 py-2.5">Nama Perkiraan</th>
                     <th className="w-36 px-3 py-2.5 text-right">Debit</th>
                     <th className="w-36 px-3 py-2.5 text-right">Kredit</th>
                     <th className="w-10 px-2 py-2.5" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {lines.map((l, i) => (
-                    <tr key={i}>
-                      <td className="px-3 py-2">
-                        <AccountPicker value={l.account_id} accounts={selectable} onChange={(id) => setLine(i, { account_id: id })} />
-                      </td>
-                      <td className="px-3 py-2">
-                        <select value={l.outlet_id} onChange={(e) => setLine(i, { outlet_id: e.target.value })} className={inputCls}>
-                          <option value="">Pusat</option>
-                          {outlets.map((o) => (
-                            <option key={o.id} value={o.id}>{o.name}</option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="px-3 py-2">
-                        <input
-                          type="text"
-                          value={l.memo}
-                          onChange={(e) => setLine(i, { memo: e.target.value })}
-                          placeholder="Opsional"
-                          className={inputCls}
-                        />
-                      </td>
-                      <td className="px-3 py-2">
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          placeholder="0"
-                          value={l.debit}
-                          onChange={(e) => {
-                            const v = formatNumber(e.target.value);
-                            setLine(i, { debit: v, credit: v ? "" : l.credit });
-                          }}
-                          className={cn(inputCls, "text-right font-semibold tabular-nums")}
-                        />
-                      </td>
-                      <td className="px-3 py-2">
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          placeholder="0"
-                          value={l.credit}
-                          onChange={(e) => {
-                            const v = formatNumber(e.target.value);
-                            setLine(i, { credit: v, debit: v ? "" : l.debit });
-                          }}
-                          className={cn(inputCls, "text-right font-semibold tabular-nums")}
-                        />
-                      </td>
-                      <td className="px-2 py-2 text-center">
-                        <button
-                          type="button"
-                          title="Hapus baris"
-                          onClick={() => setLines((p) => (p.length <= 2 ? p.map((x, idx) => (idx === i ? emptyLine() : x)) : p.filter((_, idx) => idx !== i)))}
-                          className="rounded-md p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-500"
-                        >
-                          <HiOutlineTrash className="h-4 w-4" />
-                        </button>
+                  {lines.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="px-3 py-8 text-center text-xs text-slate-400">
+                        Belum ada baris. Pilih akun di bawah untuk menambahkan.
                       </td>
                     </tr>
-                  ))}
+                  )}
+                  {lines.map((l, i) => {
+                    const acc = accountOf(l.account_id);
+                    return (
+                      <tr
+                        key={i}
+                        title="Klik untuk mengubah baris"
+                        onClick={() => setDialog({ index: i, account_id: l.account_id })}
+                        className="cursor-pointer hover:bg-emerald-50/40"
+                      >
+                        <td className="px-3 py-2.5 font-mono font-bold text-slate-800">{acc?.code}</td>
+                        <td className="px-3 py-2.5 text-slate-600">{acc?.name || `Akun #${l.account_id}`}</td>
+                        <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-slate-800">{rupiah(parseNumber(l.debit))}</td>
+                        <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-slate-800">{rupiah(parseNumber(l.credit))}</td>
+                        <td className="px-2 py-2.5 text-center">
+                          <button
+                            type="button"
+                            title="Hapus baris"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setLines((p) => p.filter((_, idx) => idx !== i));
+                            }}
+                            className="rounded-md p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-500"
+                          >
+                            <HiOutlineTrash className="h-4 w-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
-                <tfoot className="border-t border-slate-200 bg-slate-50 text-xs font-bold text-slate-800">
-                  <tr>
-                    <td colSpan={3} className="px-3 py-2.5 text-right">Total</td>
-                    <td className="px-3 py-2.5 text-right font-mono tabular-nums">{rupiah(totals.d)}</td>
-                    <td className="px-3 py-2.5 text-right font-mono tabular-nums">{rupiah(totals.c)}</td>
-                    <td />
-                  </tr>
-                </tfoot>
               </table>
             </div>
-            <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50/50 p-3">
-              <button
-                type="button"
-                onClick={() => setLines((p) => [...p, emptyLine()])}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-50"
-              >
-                <HiOutlinePlus className="h-4 w-4 text-emerald-600" />
-                Tambah baris
-              </button>
+            <div className="flex flex-col gap-2 border-t border-slate-100 bg-slate-50/50 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-2 sm:w-96">
+                <HiOutlinePlus className="h-4 w-4 shrink-0 text-emerald-600" />
+                <div className="flex-1">
+                  <AccountPicker
+                    value=""
+                    accounts={selectable}
+                    placeholder="Pilih akun untuk menambah baris"
+                    onChange={(id) => setDialog({ index: null, account_id: id })}
+                  />
+                </div>
+              </div>
               <span className="text-[11px] text-slate-400">
                 Akun kas cabang, piutang QRIS/EDC, piutang usaha, dan deposit tidak tersedia di jurnal manual
               </span>
+            </div>
+          </div>
+
+          {/* Ringkasan total */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Debit</p>
+              <p className="mt-0.5 text-base font-extrabold tabular-nums text-slate-800">Rp {rupiah(totals.d)}</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Credit</p>
+              <p className="mt-0.5 text-base font-extrabold tabular-nums text-slate-800">Rp {rupiah(totals.c)}</p>
             </div>
           </div>
 
@@ -569,7 +573,7 @@ export default function FormJurnalManual({ open, editId, onClose, onSuccess }) {
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center justify-between border-t border-slate-100 bg-slate-50/50 px-6 py-4">
+        <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50/50 px-6 py-4">
           <button
             type="button"
             onClick={cancel}
@@ -578,29 +582,28 @@ export default function FormJurnalManual({ open, editId, onClose, onSuccess }) {
           >
             Batal
           </button>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => handleSave("draft")}
-              disabled={Boolean(submitting) || loading}
-              className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 transition hover:bg-slate-50 disabled:opacity-40"
-            >
-              {submitting === "draft" ? "Menyimpan..." : "Simpan draft"}
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSave("submit")}
-              disabled={Boolean(submitting) || loading || !totals.balanced}
-              title={totals.balanced ? "" : "Jurnal harus seimbang dulu"}
-              className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-bold text-white shadow-sm shadow-emerald-600/20 transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
-            >
-              {submitting === "submit" && <HiOutlineClock className="h-4 w-4 animate-spin" />}
-              Ajukan approval
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => handleSave("post")}
+            disabled={Boolean(submitting) || loading || !totals.balanced}
+            title={totals.balanced ? "" : "Jurnal harus seimbang dulu"}
+            className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-6 py-2.5 text-xs font-bold text-white shadow-sm shadow-emerald-600/20 transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+          >
+            {submitting === "post" && <HiOutlineClock className="h-4 w-4 animate-spin" />}
+            {submitting === "post" ? "Menyimpan..." : "Simpan"}
+          </button>
         </div>
       </div>
-    </div>,
-    document.body
+      </div>
+      {dialog && accountOf(dialog.account_id) && (
+        <DetailAkunDialog
+          key={`${dialog.index}-${dialog.account_id}`}
+          account={accountOf(dialog.account_id)}
+          initial={dialogInitial()}
+          onSave={saveDialog}
+          onClose={() => setDialog(null)}
+        />
+      )}
+    </div>
   );
 }

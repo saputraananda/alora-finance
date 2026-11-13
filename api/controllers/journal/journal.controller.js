@@ -21,10 +21,20 @@ export async function getJournals(req, res) {
     const limit = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 25));
     const offset = (page - 1) * limit;
 
-    const { q = "", from = "", to = "", status = "", source = "", outlet = "" } = req.query;
+    const { q = "", from = "", to = "", status = "", source = "", outlet = "", kind = "" } = req.query;
 
     const conditions = ["1=1"];
     const params = [];
+
+    // Jenis: PENDAPATAN = memuat baris akun bertipe PENDAPATAN, PENGELUARAN = memuat baris akun BEBAN.
+    // Jurnal yang memuat keduanya muncul di kedua jenis.
+    const KIND_TYPE = { PENDAPATAN: "PENDAPATAN", PENGELUARAN: "BEBAN" };
+    if (KIND_TYPE[kind]) {
+      conditions.push(
+        `EXISTS (SELECT 1 FROM tr_journal_lines jl JOIN mst_coa a ON a.id = jl.account_id WHERE jl.entry_id = je.id AND a.type = ?)`
+      );
+      params.push(KIND_TYPE[kind]);
+    }
 
     if (source) {
       conditions.push("je.source_type = ?");

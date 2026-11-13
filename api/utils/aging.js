@@ -1,5 +1,6 @@
 import { myWaschenPool } from "../db/pool.js";
 import { toFixed2 } from "./currencyHelpers.js";
+import { UNIT_SHARE_JOIN, unitShareExpr } from "./unit.js";
 
 // Aging piutang ritel = nota POS yang belum lunas. Belum ada kebijakan jatuh tempo,
 // jadi umur dihitung sejak nota dibuat. Dibaca langsung dari POS (bukan dari jurnal).
@@ -10,13 +11,17 @@ export const AGING_BUCKETS = [
   { key: "90+", label: "> 90 hari", min: 91, max: Infinity },
 ];
 
-export async function computeAging(outletId, today, topN = 5) {
+// unit: 'all' | 'waschen' | 'cleanox' — sisa tagihan dibagi sesuai porsi nilai layanan unit pada tiap nota
+export async function computeAging(outletId, today, topN = 5, unit = "all") {
+  const share = unitShareExpr(unit);
   const [unpaid] = await myWaschenPool.query(
     `SELECT t.customer_id, c.name AS customer_name,
-            (t.grand_total - t.paid_amount) AS sisa,
+            ((t.grand_total - t.paid_amount) * ${share}) AS sisa,
             DATEDIFF(?, DATE(t.order_date)) AS age
      FROM tr_transaction t LEFT JOIN mst_customer c ON c.id = t.customer_id
+     ${unit === "all" ? "" : UNIT_SHARE_JOIN}
      WHERE t.is_delete_requested = 0 AND t.payment_status <> 'Lunas' AND t.grand_total > t.paid_amount
+       ${unit === "all" ? "" : `AND ${share} > 0`}
        ${outletId ? "AND t.outlet_id = ?" : ""}`,
     outletId ? [today, outletId] : [today]
   );

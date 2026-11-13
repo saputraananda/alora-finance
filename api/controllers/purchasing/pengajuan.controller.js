@@ -13,11 +13,12 @@ import { isFinance, loadMe, financeGateOn } from '../../utils/pengajuanAccess.js
 const q = async (sql, params = []) => (await mainPool.query(sql, params))[0];
 
 // Antrean Finance: pengajuan biasa status 4, reimburse status 2 (sama dengan SuperApp).
-const COND_ANTREAN = `((pr.type = 'pengajuan' AND pr.status = 4) OR (pr.type = 'reimburse' AND pr.status = 2))`;
-const COND_BAYAR = `pr.status = 5`;
-const COND_KREDIT = `pr.payment_method = 'kredit' AND pr.status >= 6 AND pr.status != 9`;
+// Kondisi & rumus berikut juga dipakai widget dashboard "Biaya & Pembayaran".
+export const COND_ANTREAN = `((pr.type = 'pengajuan' AND pr.status = 4) OR (pr.type = 'reimburse' AND pr.status = 2))`;
+export const COND_BAYAR = `pr.status = 5`;
+export const COND_KREDIT = `pr.payment_method = 'kredit' AND pr.status >= 6 AND pr.status != 9`;
 
-const AMOUNT_SQL = `COALESCE(NULLIF(pr.nominal_bayar, 0), pr.estimasi_harga * pr.qty, 0)`;
+export const AMOUNT_SQL = `COALESCE(NULLIF(pr.nominal_bayar, 0), pr.estimasi_harga * pr.qty, 0)`;
 
 const OUTLET_SQL = `COALESCE((SELECT GROUP_CONCAT(DISTINCT mo.full_name ORDER BY mo.full_name SEPARATOR ', ')
                       FROM tr_purchase_request_scope prs
@@ -29,9 +30,9 @@ const CLASS_SQL = `(SELECT GROUP_CONCAT(mc.classification_name ORDER BY mc.class
                     JOIN mst_purchase_classification mc ON mc.id = prc.classification_id
                     WHERE prc.pr_id = pr.pr_id)`;
 
-const PAID_SQL = `COALESCE((SELECT SUM(p.nominal_bayar) FROM tr_purchase_request_payment p WHERE p.pr_id = pr.pr_id), 0)`;
+export const PAID_SQL = `COALESCE((SELECT SUM(p.nominal_bayar) FROM tr_purchase_request_payment p WHERE p.pr_id = pr.pr_id), 0)`;
 
-const FROM_SQL = `
+export const FROM_SQL = `
   FROM tr_purchase_request pr
   LEFT JOIN mst_employee   e ON e.employee_id   = pr.employee_id
   LEFT JOIN mst_department d ON d.department_id = pr.department_id

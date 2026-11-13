@@ -222,13 +222,21 @@ async function lockMessageForJournal(j) {
   return lockMessageFor(String(j.entry_date).slice(0, 10), j.outlet_id, rows.map((r) => r.outlet_id));
 }
 
-const statusFor = (action) => (action === "submit" ? "PENDING" : "DRAFT");
+// Aksi simpan: "post" = langsung diposting (alur saat ini, tanpa approval), "submit" = ajukan approval,
+// "draft" = simpan sebagai draft. Alur approval tetap tersedia di server bila finance memintanya.
+const ACTIONS = ["draft", "submit", "post"];
+const parseAction = (v) => (ACTIONS.includes(v) ? v : "draft");
+const statusFor = (action) => ({ draft: "DRAFT", submit: "PENDING", post: "POSTED" })[action];
+const ACTION_MESSAGE = {
+  create: { draft: "Draft jurnal disimpan.", submit: "Jurnal diajukan, menunggu approval.", post: "Jurnal disimpan dan diposting." },
+  update: { draft: "Draft jurnal diperbarui.", submit: "Jurnal diajukan, menunggu approval.", post: "Jurnal disimpan dan diposting." },
+};
 
 // ── POST /journals {action: 'draft' | 'submit', ...} ────────────────────
 export async function createManualJournal(req, res) {
-  const action = req.body?.action === "submit" ? "submit" : "draft";
+  const action = parseAction(req.body?.action);
   const actorId = req.user?.id || null;
-  const norm = await normalize(req.body, { requireBalanced: action === "submit" });
+  const norm = await normalize(req.body, { requireBalanced: action !== "draft" });
   if (norm.error) return res.status(422).json(norm.error);
   const v = norm.value;
   const lockMsg = await lockMessageFor(v.entry_date, v.outlet_id, v.lines.map((l) => l.outlet_id));
@@ -242,9 +250,9 @@ export async function createManualJournal(req, res) {
     const [h] = await conn.query(
       `INSERT INTO tr_journal_entries
          (entry_no, entry_date, description, status, total_amount, created_by, source_type, outlet_id,
-          attachment_url, attachment_name, submitted_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'MANUAL', ?, ?, ?, ${action === "submit" ? "NOW()" : "NULL"})`,
-      [entryNo, v.entry_date, v.description, status, v.total, actorId, v.outlet_id, v.attachment_url, v.attachment_name]
+          attachment_url, attachment_name, submitted_at, approved_by, approved_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'MANUAL', ?, ?, ?, ${action === "submit" ? "NOW()" : "NULL"}, ?, ${action === "post" ? "NOW()" : "NULL"})`,
+      [entryNo, v.entry_date, v.description, status, v.total, actorId, v.outlet_id, v.attachment_url, v.attachment_name, action === "post" ? actorId : null]
     );
     await insertLines(conn, h.insertId, v.lines);
     await audit(conn, h.insertId, action === "submit" ? "SUBMIT" : "CREATE", actorId, null, {
@@ -254,7 +262,7 @@ export async function createManualJournal(req, res) {
     });
     await conn.commit();
     return res.status(201).json({
-      message: action === "submit" ? "Jurnal diajukan, menunggu approval." : "Draft jurnal disimpan.",
+      message: ACTION_MESSAGE.create[action],
       entry_no: entryNo,
       id: h.insertId,
       status,
@@ -270,9 +278,9 @@ export async function createManualJournal(req, res) {
 
 // ── PUT /journals/:id {action} — ubah draft (hanya pembuatnya) ──────────
 export async function updateManualJournal(req, res) {
-  const action = req.body?.action === "submit" ? "submit" : "draft";
+  const action = parseAction(req.body?.action);
   const actorId = req.user?.id || null;
-  const norm = await normalize(req.body, { requireBalanced: action === "submit" });
+  const norm = await normalize(req.body, { requireBalanced: action !== "draft" });
   if (norm.error) return res.status(422).json(norm.error);
   const v = norm.value;
   const lockMsg = await lockMessageFor(v.entry_date, v.outlet_id, v.lines.map((l) => l.outlet_id));
@@ -300,16 +308,17 @@ export async function updateManualJournal(req, res) {
     await conn.query(
       `UPDATE tr_journal_entries
        SET entry_date=?, description=?, status=?, total_amount=?, outlet_id=?, attachment_url=?, attachment_name=?,
-           reject_note=NULL, submitted_at=${action === "submit" ? "NOW()" : "NULL"}
+           reject_note=NULL, submitted_at=${action === "submit" ? "NOW()" : "NULL"},
+           approved_by=?, approved_at=${action === "post" ? "NOW()" : "NULL"}
        WHERE id=?`,
-      [v.entry_date, v.description, status, v.total, v.outlet_id, v.attachment_url, v.attachment_name, j.id]
+      [v.entry_date, v.description, status, v.total, v.outlet_id, v.attachment_url, v.attachment_name, action === "post" ? actorId : null, j.id]
     );
     await conn.query(`DELETE FROM tr_journal_lines WHERE entry_id = ?`, [j.id]);
     await insertLines(conn, j.id, v.lines);
     await audit(conn, j.id, action === "submit" ? "SUBMIT" : "UPDATE", actorId, { status: j.status }, { status });
     await conn.commit();
     return res.json({
-      message: action === "submit" ? "Jurnal diajukan, menunggu approval." : "Draft jurnal diperbarui.",
+      message: ACTION_MESSAGE.update[action],
       entry_no: j.entry_no,
       id: j.id,
       status,

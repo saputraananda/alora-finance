@@ -1,18 +1,18 @@
 import { pool, myWaschenPool, getOutlets } from "../../db/pool.js";
 import { toFixed2 } from "../../utils/currencyHelpers.js";
-import { cutoffRange, currentCutoffMonth } from "./dashboard.controller.js";
+import { resolveRange } from "./dashboard.controller.js";
 import { computeAging } from "../../utils/aging.js";
+import { parseUnit } from "../../utils/unit.js";
 import { loadStartDates, beforeStart } from "../../utils/outletStart.js";
 
 // ════════════════════════════════════════════════════════════════════════════
-// DASHBOARD — RINGKASAN PER CABANG
-//  • Pendapatan, beban, pelunasan: dibaca dari JURNAL yang sudah diposting.
+// DASHBOARD — REKONSILIASI, PERLU TINDAKAN, AGING, REKON & KAS
 //  • Status rekonsiliasi, perlu tindakan: dari data rekonsiliasi + aktivitas POS.
 //  • Aging piutang: dibaca langsung dari nota POS yang belum lunas
 //    (belum ada kebijakan jatuh tempo, jadi umur dihitung sejak nota dibuat).
+//  • Pendapatan, beban, laba ada di dashboard.controller.js (dari jurnal).
 // ════════════════════════════════════════════════════════════════════════════
 
-const pad2 = (n) => String(n).padStart(2, "0");
 const todayWib = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
 const addDays = (dateStr, n) => {
   const d = new Date(`${dateStr}T00:00:00Z`);
@@ -24,11 +24,8 @@ const ddmm = (d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
 
 export async function getDashboardOverview(req, res) {
   try {
-    const cur = currentCutoffMonth();
-    const year = parseInt(req.query.year, 10) || cur.year;
-    const month = parseInt(req.query.month, 10) || cur.month;
     const outletId = req.query.outlet ? Number(req.query.outlet) : null;
-    const { start, end } = cutoffRange(year, month);
+    const { from: start, to: end } = resolveRange(req.query);
 
     const today = todayWib();
     const yesterday = addDays(today, -1);
@@ -36,52 +33,15 @@ export async function getDashboardOverview(req, res) {
     const winEnd = today;
 
     const outlets = await getOutlets();
-    const nameOf = new Map(outlets.map((o) => [o.id, o.name]));
     const scope = outlets.filter((o) => !outletId || o.id === outletId);
 
-    // ── 1. Pendapatan per cabang (dari jurnal) ───────────────────────────
-    const [revRows] = await pool.query(
-      `SELECT jl.outlet_id, COALESCE(SUM(jl.credit - jl.debit), 0) AS revenue
+    // ── 1. Beban MDR periode ini (jurnal; akun peran BEBAN_MDR) ──────────
+    const [[mdrRow]] = await pool.query(
+      `SELECT COALESCE(SUM(jl.debit - jl.credit), 0) AS amount
        FROM tr_journal_lines jl
        JOIN tr_journal_entries je ON je.id = jl.entry_id
-       JOIN mst_coa a ON a.id = jl.account_id
-       WHERE je.status IN ('POSTED','REVERSED') AND a.type = 'PENDAPATAN'
-         AND je.entry_date BETWEEN ? AND ?
-       GROUP BY jl.outlet_id`,
-      [start, end]
-    );
-    const revenueByOutlet = revRows
-      .map((r) => ({
-        outlet_id: r.outlet_id ? Number(r.outlet_id) : null,
-        outlet_name: r.outlet_id ? nameOf.get(Number(r.outlet_id)) || `Outlet #${r.outlet_id}` : "Pusat",
-        revenue: toFixed2(r.revenue),
-      }))
-      .filter((r) => !outletId || r.outlet_id === outletId)
-      .sort((a, b) => b.revenue - a.revenue);
-
-    // ── 1b. Laba cabang = pendapatan − beban yang ditandai cabang (termasuk alokasi biaya pusat) ─
-    const [expRows] = await pool.query(
-      `SELECT jl.outlet_id, COALESCE(SUM(jl.debit - jl.credit), 0) AS expense
-       FROM tr_journal_lines jl
-       JOIN tr_journal_entries je ON je.id = jl.entry_id
-       JOIN mst_coa a ON a.id = jl.account_id
-       WHERE je.status IN ('POSTED','REVERSED') AND a.type = 'BEBAN' AND jl.outlet_id IS NOT NULL
-         AND je.entry_date BETWEEN ? AND ?
-       GROUP BY jl.outlet_id`,
-      [start, end]
-    );
-    const branchRev = revenueByOutlet.filter((r) => r.outlet_id).reduce((s, r) => s + r.revenue, 0);
-    const branchExp = expRows.filter((r) => !outletId || Number(r.outlet_id) === outletId).reduce((s, r) => s + Number(r.expense), 0);
-    const [[allocRow]] = await pool.query(
-      `SELECT status FROM tr_journal_entries WHERE source_type = 'ALOKASI' AND source_ref = ? ORDER BY id DESC LIMIT 1`,
-      [`ALO-${year}-${pad2(month)}`]
-    ).then(([r]) => [r.length ? r : [null]]);
-
-    // ── 2. Pembayaran masuk (pelunasan) dari batch POS yang sudah diposting ─
-    const [payRows] = await pool.query(
-      `SELECT COALESCE(SUM(b.payments), 0) AS payments, COALESCE(SUM(b.revenue), 0) AS sales, COUNT(*) AS days
-       FROM tr_pos_batch b JOIN tr_journal_entries je ON je.id = b.journal_id
-       WHERE je.status = 'POSTED' AND b.batch_date BETWEEN ? AND ?${outletId ? " AND b.outlet_id = ?" : ""}`,
+       JOIN mst_account_map m ON m.account_id = jl.account_id AND m.role = 'BEBAN_MDR'
+       WHERE je.status IN ('POSTED','REVERSED') AND je.entry_date BETWEEN ? AND ?${outletId ? " AND jl.outlet_id = ?" : ""}`,
       outletId ? [start, end, outletId] : [start, end]
     );
 
@@ -166,11 +126,15 @@ export async function getDashboardOverview(req, res) {
     const deposited = new Set(depRows.map((r) => `${r.outlet_id}|${r.d}`));
     const settled = new Set(setRows.map((r) => `${r.outlet_id}|${r.method}|${r.d}`));
 
-    // Hari yang belum dikunci dalam periode (s/d kemarin)
-    let unlockedDays = 0;
+    // Hari berjalan dalam rentang (s/d kemarin) yang punya transaksi: berapa yang sudah dikunci & cocok
+    let activeDays = 0;
+    let cocokDays = 0;
     for (const o of scope) {
       for (let d = start; d <= end && d <= yesterday; d = addDays(d, 1)) {
-        if (hasActivity(o.id, d) && dailyBy.get(`${o.id}|${d}`)?.status !== "APPROVED") unlockedDays += 1;
+        if (!hasActivity(o.id, d)) continue;
+        activeDays += 1;
+        const rec = dailyBy.get(`${o.id}|${d}`);
+        if (rec?.status === "APPROVED" && Math.abs(rec.diff) <= 1) cocokDays += 1;
       }
     }
 
@@ -259,23 +223,17 @@ export async function getDashboardOverview(req, res) {
     actions.sort((a, b) => b.severity - a.severity || b.age - a.age);
 
     // ── 7. Aging piutang ritel (nota belum lunas) ────────────────────────
-    const aging = await computeAging(outletId, today, 5);
+    const aging = await computeAging(outletId, today, 5, parseUnit(req.query));
 
     return res.json({
       data: {
-        period: { year, month, start_date: start, end_date: end, outlet_id: outletId },
-        outlets: outlets.map((o) => ({ id: o.id, name: o.name })),
+        period: { start_date: start, end_date: end, outlet_id: outletId },
         kpis: {
-          payments_in: toFixed2(payRows[0]?.payments || 0),
-          posted_sales: toFixed2(payRows[0]?.sales || 0),
-          posted_days: Number(payRows[0]?.days || 0),
           cash_diff_total: toFixed2(cashDiffTotal),
           cash_diff_days: cashDiffDays,
-          unlocked_days: unlockedDays,
-          branch_revenue: toFixed2(branchRev),
-          branch_profit: toFixed2(branchRev - branchExp),
-          branch_margin: branchRev > 0 ? toFixed2(((branchRev - branchExp) / branchRev) * 100) : null,
-          allocation_posted: allocRow?.status === "POSTED",
+          active_days: activeDays,
+          cocok_days: cocokDays,
+          mdr_expense: toFixed2(mdrRow.amount),
           volume_kg: toFixed2(vol.kg),
           volume_kg_per_day: toFixed2(Number(vol.kg) / elapsedDays),
           volume_pcs: Number(vol.pcs),
@@ -287,7 +245,6 @@ export async function getDashboardOverview(req, res) {
             worst: worst ? `${worst.method} ${worst.outlet}` : null,
           },
         },
-        revenue_by_outlet: revenueByOutlet,
         reconciliation_grid: grid,
         actions: { total: actions.length, items: actions.slice(0, 10) },
         aging,

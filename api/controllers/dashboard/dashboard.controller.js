@@ -1,11 +1,10 @@
-
 import { pool } from "../../db/pool.js";
 import { toFixed2 } from "../../utils/currencyHelpers.js";
+import { parseUnit, unitShare } from "../../utils/unit.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // DASHBOARD HO FINANCE
 // ════════════════════════════════════════════════════════════════════════════
-
 
 // ── Periode cutoff Waschen: 26 bulan sebelumnya → 25 bulan berjalan ─────
 const pad2 = (n) => String(n).padStart(2, "0");
@@ -28,225 +27,156 @@ export function currentCutoffMonth() {
     return { year: yy, month: mm };
 }
 
+const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ""));
+const addDays = (s, n) => {
+    const d = new Date(`${s}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+};
+const dayDiff = (a, b) => Math.round((Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86400000);
+
 /**
- * GET /api/finance-ho/dashboard
- * Ringkasan Eksekutif Keuangan:
- * 1. KPI Cards: Total Pendapatan, Total Beban, Laba Bersih, Net Margin %, Realisasi Budget Beban, Kas & Bank
- * 2. Tren Bulanan 6 Bulan Terakhir (Revenue, Beban, Laba Bersih)
- * 3. Komposisi Beban Terbesar (Top 6 akun beban + budget comparison)
- * 4. Transaksi Jurnal Terkini (5 transaksi terakhir)
+ * Rentang tanggal dashboard dari query `from`/`to` (YYYY-MM-DD).
+ * Tanpa itu: periode cutoff dari `year`/`month`, atau periode yang sedang berjalan.
+ * `cutoff` terisi bila rentangnya persis satu periode cutoff (dipakai untuk anggaran & pembanding).
+ */
+export function resolveRange(query = {}) {
+    let from;
+    let to;
+    if (isDate(query.from) && isDate(query.to) && query.from <= query.to) {
+        from = query.from;
+        to = query.to;
+    } else {
+        const cur = currentCutoffMonth();
+        const r = cutoffRange(parseInt(query.year, 10) || cur.year, parseInt(query.month, 10) || cur.month);
+        from = r.start;
+        to = r.end;
+    }
+    let cutoff = null;
+    if (to.slice(8, 10) === "25") {
+        const y = Number(to.slice(0, 4));
+        const m = Number(to.slice(5, 7));
+        const r = cutoffRange(y, m);
+        if (r.start === from && r.end === to) cutoff = { year: y, month: m };
+    }
+    return { from, to, cutoff };
+}
+
+// Periode pembanding: periode cutoff sebelumnya, atau rentang sama panjang tepat sebelum `from`
+export function previousRange({ from, to, cutoff }) {
+    if (cutoff) {
+        const [py, pm] = shiftMonth(cutoff.year, cutoff.month, -1);
+        const r = cutoffRange(py, pm);
+        return { from: r.start, to: r.end };
+    }
+    const n = dayDiff(to, from) + 1;
+    const pTo = addDays(from, -1);
+    return { from: addDays(pTo, -(n - 1)), to: pTo };
+}
+
+// Pendapatan & beban dari jurnal yang sudah diposting (opsional per cabang)
+async function sumProfitLoss(from, to, outletId) {
+    const [[row]] = await pool.query(
+        `SELECT
+           COALESCE(SUM(CASE WHEN a.type = 'PENDAPATAN' THEN jl.credit - jl.debit ELSE 0 END), 0) AS revenue,
+           COALESCE(SUM(CASE WHEN a.type = 'BEBAN' THEN jl.debit - jl.credit ELSE 0 END), 0) AS expense
+         FROM tr_journal_lines jl
+         JOIN tr_journal_entries je ON je.id = jl.entry_id
+         JOIN mst_coa a ON a.id = jl.account_id
+         WHERE je.status IN ('POSTED','REVERSED') AND a.type IN ('PENDAPATAN','BEBAN')
+           AND je.entry_date BETWEEN ? AND ?${outletId ? " AND jl.outlet_id = ?" : ""}`,
+        outletId ? [from, to, outletId] : [from, to]
+    );
+    return { revenue: toFixed2(row.revenue), expense: toFixed2(row.expense) };
+}
+
+/**
+ * GET /api/finance-ho/dashboard?from&to&outlet
+ * Angka keuangan dari jurnal untuk widget Laba/Rugi, Beban Perusahaan, dan Jurnal Terkini.
+ * Dengan ?unit=waschen|cleanox angkanya dialokasikan menurut porsi unit (lihat utils/unit.js).
  */
 export async function getFinanceDashboard(req, res) {
     try {
-        // Periode mengikuti cutoff Waschen: tanggal 26 bulan lalu s/d 25 bulan berjalan
-        const cur = currentCutoffMonth();
-        const year = parseInt(req.query.year, 10) || cur.year;
-        const month = parseInt(req.query.month, 10) || cur.month;
-
-        const pad = (n) => String(n).padStart(2, "0");
-        const { start: periodStart, end: periodEnd } = cutoffRange(year, month);
-        const budgetPeriod = `${year}-${pad(month)}-01`; // anggaran disimpan per bulan (tanggal 1)
-
-        // Filter cabang (opsional) — memakai kolom outlet_id pada baris jurnal
+        const range = resolveRange(req.query);
+        const prev = previousRange(range);
         const outletId = req.query.outlet ? Number(req.query.outlet) : null;
         const oc = outletId ? " AND jl.outlet_id = ?" : "";
         const op = outletId ? [outletId] : [];
 
-        // 1. Total Pendapatan (Bulan Ini)
-        const [revRows] = await pool.query(
-            `SELECT 
-         COALESCE(SUM(jl.credit - jl.debit), 0) AS total_revenue
-       FROM tr_journal_lines jl
-       JOIN tr_journal_entries je ON jl.entry_id = je.id
-       JOIN mst_coa a ON jl.account_id = a.id
-       WHERE je.status IN ('POSTED','REVERSED')
-         AND a.type = 'PENDAPATAN'
-         AND je.entry_date >= ? AND je.entry_date <= ?${oc}`,
-            [periodStart, periodEnd, ...op]
-        );
-        const totalRevenue = toFixed2(revRows[0]?.total_revenue || 0);
+        // Filter unit: jurnal belum punya dimensi unit, jadi pendapatan & beban dialokasikan
+        // sesuai porsi unit itu dari penjualan POS pada rentang yang sama (cara sama dengan alokasi biaya pusat).
+        const unit = parseUnit(req.query);
+        const share = await unitShare(unit, range.from, range.to, outletId);
+        const prevShare = await unitShare(unit, prev.from, prev.to, outletId);
+        const scale = (p, s) => ({ revenue: toFixed2(p.revenue * s), expense: toFixed2(p.expense * s) });
+        const cur = scale(await sumProfitLoss(range.from, range.to, outletId), share);
+        const old = scale(await sumProfitLoss(prev.from, prev.to, outletId), prevShare);
+        const netProfit = toFixed2(cur.revenue - cur.expense);
+        const prevProfit = toFixed2(old.revenue - old.expense);
 
-        // 2. Total Beban (Bulan Ini)
+        // Beban per akun → 5 terbesar + sisanya ("Lainnya") dengan rincian 3 akun teratasnya
         const [expRows] = await pool.query(
-            `SELECT 
-         COALESCE(SUM(jl.debit - jl.credit), 0) AS total_expense
-       FROM tr_journal_lines jl
-       JOIN tr_journal_entries je ON jl.entry_id = je.id
-       JOIN mst_coa a ON jl.account_id = a.id
-       WHERE je.status IN ('POSTED','REVERSED')
-         AND a.type = 'BEBAN'
-         AND je.entry_date >= ? AND je.entry_date <= ?${oc}`,
-            [periodStart, periodEnd, ...op]
+            `SELECT a.code AS account_code, a.name AS account_name, COALESCE(SUM(jl.debit - jl.credit), 0) AS amount
+             FROM tr_journal_lines jl
+             JOIN tr_journal_entries je ON je.id = jl.entry_id
+             JOIN mst_coa a ON a.id = jl.account_id
+             WHERE je.status IN ('POSTED','REVERSED') AND a.type = 'BEBAN'
+               AND je.entry_date BETWEEN ? AND ?${oc}
+             GROUP BY a.id, a.code, a.name
+             HAVING amount > 0
+             ORDER BY amount DESC`,
+            [range.from, range.to, ...op]
         );
-        const totalExpense = toFixed2(expRows[0]?.total_expense || 0);
+        const accounts = expRows.map((r) => ({ account_code: r.account_code, name: r.account_name, amount: toFixed2(r.amount * share) }));
+        const top = accounts.slice(0, 5);
+        const rest = accounts.slice(5);
 
-        // 3. Laba Bersih & Margin
-        const netProfit = toFixed2(totalRevenue - totalExpense);
-        const netMargin = totalRevenue > 0 ? toFixed2((netProfit / totalRevenue) * 100) : 0;
-
-        // 4. Realisasi Anggaran Beban (Budget vs Actual)
-        const [budgetRows] = await pool.query(
-            `SELECT 
-         COALESCE(SUM(b.amount), 0) AS total_budget
-       FROM tr_budgets b
-       JOIN mst_coa a ON b.account_id = a.id
-       WHERE a.type = 'BEBAN'
-         AND b.period = ?`,
-            [budgetPeriod]
-        );
-        const totalBudget = toFixed2(budgetRows[0]?.total_budget || 0);
-        const budgetUsedPercent = totalBudget > 0 ? toFixed2((totalExpense / totalBudget) * 100) : 0;
-        const budgetRemaining = toFixed2(totalBudget - totalExpense);
-
-        // 5. Total Saldo Kas & Bank (Per tanggal akhir periode)
-        const [cashRows] = await pool.query(
-            `SELECT 
-         COALESCE(SUM(
-           CASE 
-             WHEN a.normal_balance = 'DEBIT' THEN jl.debit - jl.credit
-             ELSE jl.credit - jl.debit
-           END
-         ), 0) AS total_cash
-       FROM tr_journal_lines jl
-       JOIN tr_journal_entries je ON jl.entry_id = je.id
-       JOIN mst_coa a ON jl.account_id = a.id
-       WHERE je.status IN ('POSTED','REVERSED')
-         AND a.type = 'ASET'
-         AND (LOWER(a.name) LIKE '%kas%' OR LOWER(a.name) LIKE '%bank%' OR a.code LIKE '11%')
-         AND je.entry_date <= ?`,
-            [periodEnd]
-        );
-        const totalCash = toFixed2(cashRows[0]?.total_cash || 0);
-
-        // 6. Tren 6 Bulan Terakhir
-        const trendStart = cutoffRange(...shiftMonth(year, month, -5)).start;
-        const [trendRows] = await pool.query(
-            `SELECT 
-         DATE_FORMAT(IF(DAY(je.entry_date) >= 26, DATE_ADD(DATE_FORMAT(je.entry_date, '%Y-%m-01'), INTERVAL 1 MONTH), je.entry_date), '%Y-%m') AS ym,
-         COALESCE(SUM(CASE WHEN a.type = 'PENDAPATAN' THEN jl.credit - jl.debit ELSE 0 END), 0) AS revenue,
-         COALESCE(SUM(CASE WHEN a.type = 'BEBAN' THEN jl.debit - jl.credit ELSE 0 END), 0) AS expense
-       FROM tr_journal_lines jl
-       JOIN tr_journal_entries je ON jl.entry_id = je.id
-       JOIN mst_coa a ON jl.account_id = a.id
-       WHERE je.status IN ('POSTED','REVERSED')
-         AND a.type IN ('PENDAPATAN', 'BEBAN')
-         AND je.entry_date >= ? AND je.entry_date <= ?${oc}
-       GROUP BY ym
-       ORDER BY ym ASC`,
-            [trendStart, periodEnd, ...op]
-        );
-
-        const trendMap = new Map();
-        trendRows.forEach((r) => {
-            const rev = toFixed2(r.revenue);
-            const exp = toFixed2(r.expense);
-            trendMap.set(r.ym, {
-                revenue: rev,
-                expense: exp,
-                net_profit: toFixed2(rev - exp),
-            });
-        });
-
-        const monthNamesID = [
-            "Jan", "Feb", "Mar", "Apr", "Mei", "Jun",
-            "Jul", "Agu", "Sep", "Okt", "Nov", "Des"
-        ];
-
-        const monthlyTrends = [];
-        for (let i = 5; i >= 0; i--) {
-            const d = new Date(Date.UTC(year, month - 1 - i, 1));
-            const ym = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}`;
-            const label = `${monthNamesID[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
-            const entry = trendMap.get(ym) || { revenue: 0, expense: 0, net_profit: 0 };
-            monthlyTrends.push({
-                ym,
-                label,
-                ...entry,
-            });
+        // Anggaran beban hanya bermakna untuk satu periode cutoff penuh, dan anggaran belum dipisah per unit
+        let budget = null;
+        if (range.cutoff && unit === "all") {
+            const [[b]] = await pool.query(
+                `SELECT COALESCE(SUM(b.amount), 0) AS total FROM tr_budgets b JOIN mst_coa a ON a.id = b.account_id
+                 WHERE a.type = 'BEBAN' AND b.period = ?`,
+                [`${range.cutoff.year}-${pad2(range.cutoff.month)}-01`]
+            );
+            const total = toFixed2(b.total);
+            if (total > 0) budget = { total, used_percent: toFixed2((cur.expense / total) * 100) };
         }
 
-        // 7. Komposisi Beban Terbesar (Top 6 Akun Beban)
-        const [topExpRows] = await pool.query(
-            `SELECT 
-         a.id AS account_id,
-         a.code AS account_code,
-         a.name AS account_name,
-         COALESCE(SUM(jl.debit - jl.credit), 0) AS actual_amount,
-         COALESCE(b.amount, 0) AS budget_amount
-       FROM mst_coa a
-       JOIN tr_journal_lines jl ON jl.account_id = a.id
-       JOIN tr_journal_entries je ON jl.entry_id = je.id
-       LEFT JOIN tr_budgets b ON b.account_id = a.id AND b.period = ?
-       WHERE je.status IN ('POSTED','REVERSED')
-         AND a.type = 'BEBAN'
-         AND je.entry_date >= ? AND je.entry_date <= ?${oc}
-       GROUP BY a.id, a.code, a.name, b.amount
-       HAVING actual_amount > 0
-       ORDER BY actual_amount DESC
-       LIMIT 6`,
-            [budgetPeriod, periodStart, periodEnd, ...op]
-        );
-
-        const topExpenses = topExpRows.map((item) => {
-            const act = toFixed2(item.actual_amount);
-            const bud = toFixed2(item.budget_amount);
-            const pctOfTotal = totalExpense > 0 ? toFixed2((act / totalExpense) * 100) : 0;
-            const pctOfBudget = bud > 0 ? toFixed2((act / bud) * 100) : null;
-            return {
-                account_id: item.account_id,
-                account_code: item.account_code,
-                account_name: item.account_name,
-                actual_amount: act,
-                budget_amount: bud,
-                percent_of_total: pctOfTotal,
-                percent_of_budget: pctOfBudget,
-            };
-        });
-
-        // 8. Transaksi Jurnal Terkini (5 Terakhir)
         const [recentJournals] = await pool.query(
-            `SELECT 
-         je.id,
-         je.entry_no,
-         DATE_FORMAT(je.entry_date, '%Y-%m-%d') AS entry_date,
-         je.description,
-         je.total_amount,
-         je.status,
-         je.created_at,
-         COUNT(jl.id) AS total_lines
-       FROM tr_journal_entries je
-       LEFT JOIN tr_journal_lines jl ON je.id = jl.entry_id
-       WHERE je.status IN ('POSTED','REVERSED')
-       GROUP BY je.id
-       ORDER BY je.entry_date DESC, je.id DESC
-       LIMIT 5`
+            `SELECT je.id, je.entry_no, DATE_FORMAT(je.entry_date, '%Y-%m-%d') AS entry_date, je.description,
+                    je.total_amount, je.status, COUNT(jl.id) AS total_lines
+             FROM tr_journal_entries je
+             LEFT JOIN tr_journal_lines jl ON jl.entry_id = je.id
+             WHERE je.status IN ('POSTED','REVERSED')
+             GROUP BY je.id
+             ORDER BY je.entry_date DESC, je.id DESC
+             LIMIT 5`
         );
 
         return res.json({
             data: {
-                period: {
-                    year,
-                    month,
-                    start_date: periodStart,
-                    outlet_id: outletId,
-                    end_date: periodEnd,
-                },
+                period: { from: range.from, to: range.to, prev_from: prev.from, prev_to: prev.to, is_cutoff: Boolean(range.cutoff), outlet_id: outletId },
+                unit: unit === "all" ? null : { key: unit, share: toFixed2(share * 100) }, // porsi pendapatan POS (%)
                 kpis: {
-                    revenue: totalRevenue,
-                    expense: totalExpense,
+                    revenue: cur.revenue,
+                    expense: cur.expense,
                     net_profit: netProfit,
-                    net_margin: netMargin,
-                    total_budget: totalBudget,
-                    budget_used_percent: budgetUsedPercent,
-                    budget_remaining: budgetRemaining,
-                    cash_and_bank: totalCash,
+                    net_margin: cur.revenue > 0 ? toFixed2((netProfit / cur.revenue) * 100) : 0,
+                    prev_profit: prevProfit,
+                    // perubahan laba terhadap periode pembanding; kosong bila pembanding 0
+                    profit_change_percent: prevProfit !== 0 ? toFixed2(((netProfit - prevProfit) / Math.abs(prevProfit)) * 100) : null,
                 },
-                monthly_trends: monthlyTrends,
-                top_expenses: topExpenses,
-                recent_journals: recentJournals.map((j) => ({
-                    ...j,
-                    total_amount: toFixed2(j.total_amount),
-                })),
+                budget,
+                expense_breakdown: {
+                    total: cur.expense,
+                    top,
+                    other: {
+                        amount: toFixed2(rest.reduce((s, r) => s + r.amount, 0)),
+                        items: rest.slice(0, 3),
+                    },
+                },
+                recent_journals: recentJournals.map((j) => ({ ...j, total_amount: toFixed2(j.total_amount) })),
             },
         });
     } catch (err) {

@@ -1,10 +1,12 @@
 import { useMemo, useState } from "react";
 import { HiOutlineCalendarDays } from "react-icons/hi2";
-import { currentCutoff, cutoffRange, todayWib } from "../../../lib/cutoff";
-import { cn } from "../utils/format";
+import { currentCutoff, cutoffRange, todayWib } from "../lib/cutoff";
+
+const cn = (...c) => c.filter(Boolean).join(" ");
 
 // Filter tanggal seperti halaman Pengajuan SuperApp: Cutoff · Rentang Tanggal · Satu Hari · Semua.
 // Cutoff = tanggal 26 bulan sebelumnya s/d 25 bulan terpilih.
+// Dipakai di Pembelian dan Dashboard. Prop `modes` membatasi pilihan mode yang tampil.
 const MODES = [
   { key: "cutoff", label: "Cutoff" },
   { key: "range", label: "Rentang Tanggal" },
@@ -43,19 +45,22 @@ export function useDateFilter(defaultMode = "cutoff") {
   };
 }
 
-export default function DateFilter({ f }) {
+// compact: tanpa judul & keterangan rentang, tidak membungkus baris (untuk bilah filter satu baris)
+export default function DateFilter({ f, modes, compact = false }) {
   const years = [f.curYear, f.curYear - 1, f.curYear - 2];
   const range = cutoffRange(f.year, f.month);
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <div className="flex shrink-0 items-center gap-1.5 text-xs text-slate-500">
-        <HiOutlineCalendarDays className="h-3.5 w-3.5" />
-        <span className="font-semibold">Filter Tanggal:</span>
-      </div>
+    <div className={cn("flex items-center gap-2", compact ? "shrink-0 flex-nowrap" : "flex-wrap")}>
+      {!compact && (
+        <div className="flex shrink-0 items-center gap-1.5 text-xs text-slate-500">
+          <HiOutlineCalendarDays className="h-3.5 w-3.5" />
+          <span className="font-semibold">Filter Tanggal:</span>
+        </div>
+      )}
 
       <div className="inline-flex rounded-xl border border-slate-200 bg-white p-0.5">
-        {MODES.map((m) => (
+        {MODES.filter((m) => !modes || modes.includes(m.key)).map((m) => (
           <button
             key={m.key}
             type="button"
@@ -78,9 +83,11 @@ export default function DateFilter({ f }) {
           <select value={f.month} onChange={(e) => f.setMonth(Number(e.target.value))} className={inputCls}>
             {MONTHS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
           </select>
-          <span className="hidden rounded-full bg-slate-100 px-3 py-1.5 text-[11px] text-slate-400 sm:inline">
-            {fmtLong(range.from)} s/d {fmtLong(range.to)}
-          </span>
+          {!compact && (
+            <span className="hidden rounded-full bg-slate-100 px-3 py-1.5 text-[11px] text-slate-400 sm:inline">
+              {fmtLong(range.from)} s/d {fmtLong(range.to)}
+            </span>
+          )}
         </>
       )}
 

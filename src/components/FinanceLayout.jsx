@@ -39,7 +39,7 @@ function cn(...classes) {
 const STANDALONE_ITEMS = [
   { to: "/finance-ho/dashboard", icon: HiOutlineChartBar, label: "Dashboard", description: "Ringkasan semua cabang", end: false },
   { to: "/finance-ho/integrasi-pos", icon: HiOutlineComputerDesktop, label: "Integrasi POS", description: "Sinkronisasi harian & detail batch", end: false },
-  { to: "/finance-ho/jurnal-umum", icon: HiOutlineBookOpen, label: "Jurnal", description: "Daftar jurnal & jurnal manual", end: true },
+  { to: "/finance-ho/jurnal-umum", icon: HiOutlineBookOpen, label: "Jurnal", description: "Daftar jurnal & jurnal manual", end: false },
   { to: "/finance-ho/rekonsiliasi", icon: HiOutlineScale, label: "Rekonsiliasi", description: "Harian, settlement, setoran, bank", end: false },
 ];
 
