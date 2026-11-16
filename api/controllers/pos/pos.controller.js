@@ -61,7 +61,7 @@ function isValidDate(s) {
 // ── Hitung data POS satu hari untuk semua outlet ────────────────────────
 export async function computeDay(date) {
   const [outlets] = await myWaschenPool.query(
-    `SELECT id, outlet_code, name, full_name, is_event FROM mst_outlet ORDER BY id`
+    `SELECT * FROM mst_outlet ORDER BY id`
   );
 
   const [revRows] = await myWaschenPool.query(
@@ -171,7 +171,7 @@ export async function computeDay(date) {
       } else pay[role] = toFixed2(pay[role] + amt);
     }
     const paymentsTotal = toFixed2(PAYMENT_ROLES.reduce((s, r) => s + pay[r], 0));
-    const isEvent = Number(o.is_event) === 1;
+    const isEvent = Number(o.is_event ?? o.is_drop_point) === 1; // event (POS lama) atau drop point (POS baru)
     const revenueParts = partsBy.get(Number(o.id)) || [];
     // Kategori layanan yang belum dipetakan ke akun → gagal validasi (outlet Event memakai akun B2B, tidak perlu)
     if (!isEvent) {

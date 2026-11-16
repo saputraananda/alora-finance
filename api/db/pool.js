@@ -81,8 +81,10 @@ export async function safeQuery(sql, params) {
 // Daftar outlet/cabang dari POS my-waschen (id → nama). Gagal koneksi → peta kosong.
 export async function getOutlets() {
   try {
-    const [rows] = await myWaschenPool.query('SELECT id, name, is_event FROM mst_outlet ORDER BY id');
-    return rows.map((r) => ({ id: Number(r.id), name: r.name, is_event: Number(r.is_event) === 1 }));
+    // SELECT * agar tahan terhadap perubahan skema POS. Outlet non-reguler (event / drop point) ditandai is_event:
+    // POS lama memakai kolom is_event, POS baru memakai is_drop_point.
+    const [rows] = await myWaschenPool.query('SELECT * FROM mst_outlet ORDER BY id');
+    return rows.map((r) => ({ id: Number(r.id), name: r.name, is_event: Number(r.is_event ?? r.is_drop_point) === 1 }));
   } catch (err) {
     console.error('[getOutlets] lookup outlet POS gagal:', err.message);
     return [];

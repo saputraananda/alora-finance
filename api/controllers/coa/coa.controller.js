@@ -1,4 +1,18 @@
 import { pool, safeQuery } from "../../db/pool.js";
+import { CF_GROUP_KEYS, loadCashFlowGroups } from "../../utils/cashFlow.js";
+
+// cash_flow_group dari body: undefined = tidak diubah, "" / null / "AUTO" = otomatis
+function parseCashFlowGroup(v) {
+    if (v === undefined) return { skip: true };
+    if (v === null || v === "" || v === "AUTO") return { value: null };
+    if (CF_GROUP_KEYS.includes(v)) return { value: v };
+    return { error: "Kelompok arus kas tidak valid." };
+}
+const saveCashFlowGroup = (id, value) =>
+    pool.query(`UPDATE mst_coa SET cash_flow_group = ? WHERE id = ?`, [value, id]).catch((err) => {
+        if (/cash_flow_group/.test(err.message)) throw new Error("Kolom kelompok arus kas belum ada. Jalankan migrasi 007_cash_flow_group.sql di repo alfi-database.");
+        throw err;
+    });
 
 // ════════════════════════════════════════════════════════════════════════════
 // MASTER CHART OF ACCOUNTS (mst_coa)
@@ -67,7 +81,12 @@ export async function getAccounts(req, res) {
             params
         );
 
-        return res.json({ data: rows });
+        const cf = await loadCashFlowGroups(pool);
+        const data = rows.map((r) => {
+            const g = cf.get(Number(r.id));
+            return { ...r, cash_flow_group: g?.manual ?? null, cash_flow: g ? { group: g.group, auto: g.auto, reason: g.reason } : null };
+        });
+        return res.json({ data });
     } catch (err) {
         console.error("[getAccounts] Error:", err);
         return res.status(500).json({ message: "Gagal mengambil daftar akun", error: err.message });
@@ -102,6 +121,8 @@ export async function createAccount(req, res) {
     try {
         const { code, name, type, normal_balance, parent_id, is_header, memo } = req.body;
         const actorId = req.user?.id || null;
+        const cfg = parseCashFlowGroup(req.body.cash_flow_group);
+        if (cfg.error) return res.status(422).json({ code: "INVALID_CASH_FLOW_GROUP", message: cfg.error });
 
         if (!code || !code.trim()) {
             return res.status(422).json({ code: "CODE_REQUIRED", message: "Kode akun wajib diisi." });
@@ -146,6 +167,7 @@ export async function createAccount(req, res) {
         );
 
         const newId = result.insertId;
+        if (!cfg.skip && cfg.value) await saveCashFlowGroup(newId, cfg.value);
 
         // Catat ke audit log
         try {
@@ -192,6 +214,8 @@ export async function updateAccount(req, res) {
             return res.status(404).json({ message: "Akun tidak ditemukan." });
         }
         const current = existing[0];
+        const cfg = parseCashFlowGroup(req.body.cash_flow_group);
+        if (cfg.error) return res.status(422).json({ code: "INVALID_CASH_FLOW_GROUP", message: cfg.error });
 
         if (code && code.trim() !== current.code) {
             const [dup] = await pool.query(`SELECT id FROM mst_coa WHERE code = ? AND id != ?`, [code.trim(), id]);
@@ -215,6 +239,7 @@ export async function updateAccount(req, res) {
        WHERE id = ?`,
             [newCode, newName, newType, newNormal, newParent, newIsHeader, newIsActive, newMemo, id]
         );
+        if (!cfg.skip && (current.cash_flow_group ?? null) !== cfg.value) await saveCashFlowGroup(id, cfg.value);
 
         return res.json({ message: "Akun berhasil diperbarui." });
     } catch (err) {

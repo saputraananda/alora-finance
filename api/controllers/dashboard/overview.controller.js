@@ -120,10 +120,27 @@ export async function getDashboardOverview(req, res) {
         [winStart, winEnd]
       ),
       pool.query(`SELECT outlet_id, DATE_FORMAT(sales_date,'%Y-%m-%d') AS d FROM tr_cash_deposit WHERE sales_date BETWEEN ? AND ?`, [winStart, winEnd]),
-      pool.query(`SELECT outlet_id, method, DATE_FORMAT(trx_date,'%Y-%m-%d') AS d FROM tr_settlement WHERE trx_date BETWEEN ? AND ?`, [winStart, winEnd]),
+      // QRIS/EDC yang sudah dicocokkan ke mutasi bank (ref_key "cabang|tanggal|metode")
+      pool
+        .query(
+          `SELECT DISTINCT i.outlet_id, SUBSTRING_INDEX(i.ref_key, '|', -1) AS method, SUBSTRING_INDEX(SUBSTRING_INDEX(i.ref_key, '|', 2), '|', -1) AS d
+           FROM tr_recon_match_item i JOIN tr_recon_match m ON m.id = i.match_id AND m.undone_at IS NULL
+           WHERE i.side = 'INTERNAL' AND i.ref_type = 'POS_ONLINE'
+             AND SUBSTRING_INDEX(SUBSTRING_INDEX(i.ref_key, '|', 2), '|', -1) BETWEEN ? AND ?`,
+          [winStart, winEnd]
+        )
+        .catch(() => [[]]),
     ]);
     const posted = new Set(batchRows.map((r) => `${r.outlet_id}|${r.d}`));
-    const deposited = new Set(depRows.map((r) => `${r.outlet_id}|${r.d}`));
+    const deposited = new Set(depRows.map((r) => `${r.outlet_id}|${r.d}`)); // setoran manual lama
+    // Penjualan tunai yang sudah dicocokkan ke mutasi bank (kunci "cabang|tanggal")
+    const [bankCashRows] = await pool
+      .query(
+        `SELECT DISTINCT i.ref_key FROM tr_recon_match_item i JOIN tr_recon_match m ON m.id = i.match_id AND m.undone_at IS NULL
+         WHERE i.side = 'INTERNAL' AND i.ref_type = 'POS_CASH'`
+      )
+      .catch(() => [[]]);
+    bankCashRows.forEach((r) => deposited.add(r.ref_key));
     const settled = new Set(setRows.map((r) => `${r.outlet_id}|${r.method}|${r.d}`));
 
     // Hari berjalan dalam rentang (s/d kemarin) yang punya transaksi: berapa yang sudah dikunci & cocok
@@ -147,7 +164,7 @@ export async function getDashboardOverview(req, res) {
     );
     const elapsedDays = Math.max(1, dayDiff(end < today ? end : today, start) + 1);
 
-    // ── 4c. Belum settle: penjualan QRIS/EDC yang belum ada laporan cairnya ─
+    // ── 4c. QRIS/EDC yang belum ditemukan di mutasi bank ─
     const unsettled = [];
     for (const o of scope) {
       for (let d = addDays(today, -14); d <= yesterday; d = addDays(d, 1)) {
@@ -195,7 +212,7 @@ export async function getDashboardOverview(req, res) {
         if (!locked && age >= 2) {
           if (a.qris > 0 && !settled.has(`${o.id}|QRIS|${d}`)) actions.push({ type: "QRIS", severity: 3, age, text: `QRIS ${o.name} ${ddmm(d)} belum cair ${age} hari`, link: "/finance-ho/rekonsiliasi" });
           if (a.edc > 0 && !settled.has(`${o.id}|EDC|${d}`)) actions.push({ type: "EDC", severity: 3, age, text: `EDC ${o.name} ${ddmm(d)} belum cair ${age} hari`, link: "/finance-ho/rekonsiliasi" });
-          if (a.cash > 0 && !deposited.has(k)) actions.push({ type: "SETOR", severity: 2, age, text: `Setoran tunai ${o.name} ${ddmm(d)} belum dicatat`, link: "/finance-ho/rekonsiliasi" });
+          if (a.cash > 0 && !deposited.has(k)) actions.push({ type: "SETOR", severity: 2, age, text: `Tunai ${o.name} ${ddmm(d)} belum ditemukan di mutasi bank`, link: "/finance-ho/rekonsiliasi" });
         }
       }
     }

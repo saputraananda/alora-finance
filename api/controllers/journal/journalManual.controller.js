@@ -2,7 +2,8 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import multer from "multer";
-import { pool, getOutlets } from "../../db/pool.js";
+import { pool, getOutlets, myWaschenPool } from "../../db/pool.js";
+import { loadDefault, takeNumber } from "../../utils/numbering.js";
 import { formatRupiah, toFixed2 } from "../../utils/currencyHelpers.js";
 import { dayLockMessage } from "../../utils/dayLock.js";
 import { loadOutletOverrides } from "../../utils/accountResolver.js";
@@ -196,20 +197,19 @@ async function insertLines(conn, entryId, lines) {
   }
 }
 
-// Nomor jurnal manual: JM-YYMMDD-NN (urut per tanggal)
-async function nextManualNo(conn, entryDate) {
-  const [y, m, d] = entryDate.slice(0, 10).split("-");
-  const prefix = `JM-${y.slice(2)}${m}${d}-`;
-  const [last] = await conn.query(
-    `SELECT entry_no FROM tr_journal_entries WHERE entry_no LIKE ? ORDER BY entry_no DESC LIMIT 1 FOR UPDATE`,
-    [`${prefix}%`]
-  );
-  let seq = 1;
-  if (last.length) {
-    const n = parseInt(last[0].entry_no.split("-").pop(), 10);
-    if (!Number.isNaN(n)) seq = n + 1;
+// Nomor jurnal manual: mengikuti Pengaturan › Penomoran (Tipe Transaksi "Jurnal Umum").
+// Bawaan = JM-YYMMDD-NN (urut per tanggal). Nomor yang sudah terpakai dilewati.
+async function nextManualNo(conn, entryDate, outletId) {
+  const cfg = await loadDefault(conn, "JURNAL");
+  let branch = "HO";
+  if (outletId && cfg.components.some((c) => c.k === "BRANCH")) {
+    const [r] = await myWaschenPool.query(`SELECT outlet_code FROM mst_outlet WHERE id = ?`, [outletId]).catch(() => [[]]);
+    branch = String(r[0]?.outlet_code || outletId).toUpperCase().replace(/[^A-Z0-9]/g, "") || "HO";
   }
-  return `${prefix}${String(seq).padStart(2, "0")}`;
+  return takeNumber(conn, cfg, { date: entryDate.slice(0, 10), branch }, async (no) => {
+    const [x] = await conn.query(`SELECT 1 FROM tr_journal_entries WHERE entry_no = ? LIMIT 1`, [no]);
+    return x.length > 0;
+  });
 }
 
 // Jurnal tidak boleh masuk ke tanggal yang sudah dikunci (per cabang)
@@ -245,7 +245,7 @@ export async function createManualJournal(req, res) {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    const entryNo = await nextManualNo(conn, v.entry_date);
+    const entryNo = await nextManualNo(conn, v.entry_date, v.outlet_id);
     const status = statusFor(action);
     const [h] = await conn.query(
       `INSERT INTO tr_journal_entries

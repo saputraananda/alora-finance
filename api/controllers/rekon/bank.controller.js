@@ -5,6 +5,7 @@ import { pool, safeQuery, getOutlets } from "../../db/pool.js";
 import { toFixed2 } from "../../utils/currencyHelpers.js";
 import { dayLockMessage } from "../../utils/dayLock.js";
 import { cutoffRange, currentCutoffMonth } from "../dashboard/dashboard.controller.js";
+import { parseCsv, parseDate } from "../../utils/statementParse.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // REKONSILIASI > BANK (Referensi hal. 14)
@@ -113,10 +114,34 @@ export async function getBankRecon(req, res) {
       if (!mBy.has(m.statement_id)) mBy.set(m.statement_id, []);
       mBy.get(m.statement_id).push({ ...m, amount: toFixed2(m.amount) });
     });
+    // Metadata hasil impor (Rekon Code sistem, nilai asli Excel, baris Excel). Tabel baru bersifat tambahan;
+    // bila migrasi 003 belum dijalankan, halaman tetap jalan tanpa metadata.
+    const metaBy = new Map();
+    if (ids.length) {
+      try {
+        const [meta] = await pool.query(
+          `SELECT statement_id, excel_row, recon_code, bank_code, direction, source_recon_code, source_payment_category, description_full, import_file_id FROM tr_bank_statement_meta WHERE statement_id IN (?)`,
+          [ids]
+        );
+        meta.forEach((m) => metaBy.set(m.statement_id, m));
+      } catch (e) {
+        console.warn("[getBankRecon] metadata impor tidak tersedia:", e.message);
+      }
+    }
     const rows = stmts.map((s) => {
       const ms = mBy.get(s.id) || [];
+      const mt = metaBy.get(s.id);
       return {
         id: s.id,
+        recon_code: mt?.recon_code || null,
+        bank_code: mt?.bank_code || null,
+        direction: mt?.direction || null,
+        source_recon_code: mt?.source_recon_code || null,
+        source_payment_category: mt?.source_payment_category || null,
+        description_full: mt?.description_full || null,
+        excel_row: mt?.excel_row || null,
+        import_file_id: mt?.import_file_id || null,
+        payment_category: null, // diisi saat matching dikonfirmasi
         date: s.d,
         description: s.description,
         amount: toFixed2(s.amount),
@@ -193,34 +218,6 @@ const ALIASES = {
 };
 const normH = (h) => String(h ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
 
-function parseCsv(text) {
-  const clean = text.replace(/^﻿/, "");
-  const first = clean.split(/\r?\n/)[0] || "";
-  const delim = (first.match(/;/g) || []).length >= (first.match(/,/g) || []).length ? ";" : ",";
-  const rows = [];
-  let row = [];
-  let cur = "";
-  let q = false;
-  for (let i = 0; i < clean.length; i++) {
-    const ch = clean[i];
-    if (q) {
-      if (ch === '"' && clean[i + 1] === '"') { cur += '"'; i++; }
-      else if (ch === '"') q = false;
-      else cur += ch;
-    } else if (ch === '"') q = true;
-    else if (ch === delim) { row.push(cur); cur = ""; }
-    else if (ch === "\n" || ch === "\r") {
-      if (ch === "\r" && clean[i + 1] === "\n") i++;
-      row.push(cur); cur = "";
-      if (row.some((c) => c.trim() !== "")) rows.push(row);
-      row = [];
-    } else cur += ch;
-  }
-  row.push(cur);
-  if (row.some((c) => c.trim() !== "")) rows.push(row);
-  return rows;
-}
-
 async function parseXlsx(buffer) {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buffer);
@@ -237,14 +234,6 @@ async function parseXlsx(buffer) {
     rows.push(vals);
   });
   return rows;
-}
-
-function parseDate(v) {
-  if (v instanceof Date) return new Date(v.getTime() + 12 * 3600 * 1000).toISOString().slice(0, 10);
-  const s = String(v ?? "").trim();
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
-  const m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})/);
-  return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : null;
 }
 
 function parseMoney(v) {

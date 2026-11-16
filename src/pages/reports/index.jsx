@@ -4,6 +4,7 @@ import { HiOutlineArrowPath, HiOutlineDocumentChartBar, HiOutlinePrinter, HiOutl
 import { api } from "../../lib/api";
 import { currentCutoffKey, cutoffMonthLabel, cutoffRangeLabel } from "../../lib/cutoff";
 import PeriodFilter, { periodText } from "../../components/ui/PeriodFilter";
+import PrintReport, { PRINT_TITLE } from "./PrintReport";
 
 const cn = (...c) => c.filter(Boolean).join(" ");
 const rp = (n) => new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 }).format(Number(n) || 0);
@@ -17,8 +18,8 @@ const REPORTS = [
   { id: "trial-balance", label: "Neraca saldo", sub: "Saldo awal, mutasi, saldo akhir" },
   { id: "aging", label: "Aging piutang", sub: "Nota belum lunas" },
   { id: "cash-diff", label: "Rekap selisih kas", sub: "Dari rekonsiliasi harian" },
-  { id: "mdr", label: "Rekap MDR", sub: "Dari settlement QRIS/EDC" },
-  { id: "cash-flow", label: "Arus kas", sub: "Belum tersedia", disabled: true },
+  { id: "mdr", label: "Rekap MDR", sub: "Dari selisih QRIS/EDC yang dijelaskan" },
+  { id: "cash-flow", label: "Arus kas", sub: "Uang masuk & keluar kas/bank" },
   { id: "ap-aging", label: "Aging hutang", sub: "Menunggu modul Pembelian", disabled: true },
 ];
 
@@ -236,7 +237,7 @@ function Mdr({ d }) {
       <table className="w-full text-left text-xs">
         <thead className="border-b border-slate-100 bg-slate-50"><tr><th className={th}>Cabang</th><th className={th}>Penyedia</th><th className={cn(th, "text-right")}>Baris</th><th className={cn(th, "text-right")}>Bruto</th><th className={cn(th, "text-right")}>MDR</th><th className={cn(th, "text-right")}>Neto</th><th className={cn(th, "text-right")}>Tarif efektif</th></tr></thead>
         <tbody className="divide-y divide-slate-100">
-          {d.rows.length === 0 && <tr><td colSpan={7} className="px-3 py-8 text-center text-slate-400">Belum ada data settlement pada periode ini.</td></tr>}
+          {d.rows.length === 0 && <tr><td colSpan={7} className="px-3 py-8 text-center text-slate-400">Belum ada selisih QRIS/EDC yang dijelaskan sebagai MDR pada periode ini.</td></tr>}
           {d.rows.map((r, i) => (
             <tr key={i}><td className="px-3 py-2 font-semibold">{r.outlet_name}</td><td className="px-3 py-2">{r.provider}</td><td className="px-3 py-2 text-right tabular-nums">{r.count}</td><td className="px-3 py-2 text-right tabular-nums">{rp(r.gross)}</td><td className="px-3 py-2 text-right tabular-nums">{rp(r.mdr)}</td><td className="px-3 py-2 text-right tabular-nums">{rp(r.net)}</td><td className="px-3 py-2 text-right tabular-nums">{pct(r.rate)}</td></tr>
           ))}
@@ -246,6 +247,117 @@ function Mdr({ d }) {
     </div>
   );
 }
+
+// ═════════════════════════ ARUS KAS ══════════════════════════════════════
+function CashFlow({ d, compare, glLink }) {
+  if (!d.mapped) {
+    return (
+      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800">
+        Belum ada akun kas atau bank. Atur akun kas cabang dan rekening bank di{" "}
+        <Link to="/finance-ho/pengaturan/rekening-bank" className="font-bold underline">Pengaturan</Link>, atau pilih kelompok "Kas &amp; bank" pada akun di{" "}
+        <Link to="/finance-ho/coa" className="font-bold underline">Master COA</Link>.
+      </div>
+    );
+  }
+  const totalIn = toNum(d.sections.reduce((s, x) => s + x.total.in, 0) + d.transfer.in);
+  const totalOut = toNum(d.sections.reduce((s, x) => s + x.total.out, 0) + d.transfer.out);
+  const cols = compare ? 5 : 4;
+  const money = (v) => (v ? rp(v) : "-");
+  const strong = (label, v, prev, cls = "") => (
+    <tr className={cn("font-extrabold", cls)}>
+      <td className="px-3 py-2.5" colSpan={3}>{label}</td>
+      <td className={cn("px-3 py-2.5 text-right tabular-nums", v < 0 && "text-rose-600")}>{rpMinus(v)}</td>
+      {compare && <td className="px-3 py-2.5 text-right tabular-nums text-slate-500">{rpMinus(prev)}</td>}
+    </tr>
+  );
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {[["Saldo awal", d.opening], ["Kas masuk", totalIn], ["Kas keluar", totalOut], ["Saldo akhir", d.closing]].map(([k, v]) => (
+          <div key={k} className="rounded-2xl border border-slate-200 bg-white p-4">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{k}</p>
+            <p className="mt-1 text-lg font-extrabold">{rpMinus(v)}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+        <table className="w-full text-left text-xs">
+          <thead className="border-b border-slate-100 bg-slate-50">
+            <tr>
+              <th className={th}>Rp</th>
+              <th className={cn(th, "text-right")}>Masuk</th>
+              <th className={cn(th, "text-right")}>Keluar</th>
+              <th className={cn(th, "text-right")}>Bersih</th>
+              {compare && <th className={cn(th, "text-right")}>Periode lalu</th>}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {strong("Saldo kas & bank awal periode", d.opening, d.prev.opening, "bg-slate-50/60")}
+            {d.sections.map((s) => (
+              <FragmentRows key={s.key}>
+                <tr className="bg-slate-50"><td colSpan={cols} className="px-3 py-2 text-[11px] font-extrabold uppercase tracking-wider text-slate-500">{s.label}</td></tr>
+                {s.rows.length === 0 && <tr><td colSpan={cols} className="px-3 py-2.5 text-slate-400">Tidak ada.</td></tr>}
+                {s.rows.map((r) => (
+                  <tr key={r.id} className="hover:bg-slate-50/60">
+                    <td className="px-3 py-2">
+                      <Link to={glLink(r.id)} className="hover:text-emerald-700 hover:underline" title="Telusuri di Buku Besar">
+                        <span className="font-mono text-slate-400">{r.code}</span> <span className="font-semibold text-slate-800">{r.name}</span>
+                      </Link>
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-600">{money(r.in)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-600">{money(r.out)}</td>
+                    <td className={cn("px-3 py-2 text-right font-semibold tabular-nums", r.net < 0 && "text-rose-600")}>{rpMinus(r.net)}</td>
+                    {compare && <td className="px-3 py-2 text-right tabular-nums text-slate-500">{r.prev_net ? rpMinus(r.prev_net) : "-"}</td>}
+                  </tr>
+                ))}
+                <tr className="border-t border-slate-200 font-bold">
+                  <td className="px-3 py-2">Kas bersih dari {s.short.toLowerCase()}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{money(s.total.in)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{money(s.total.out)}</td>
+                  <td className={cn("px-3 py-2 text-right tabular-nums", s.total.net < 0 && "text-rose-600")}>{rpMinus(s.total.net)}</td>
+                  {compare && <td className="px-3 py-2 text-right tabular-nums text-slate-500">{rpMinus(s.total.prev)}</td>}
+                </tr>
+              </FragmentRows>
+            ))}
+            {(d.transfer.in || d.transfer.out || d.transfer.prev) ? (
+              <>
+                <tr className="bg-slate-50"><td colSpan={cols} className="px-3 py-2 text-[11px] font-extrabold uppercase tracking-wider text-slate-500">Pindahan antar kas/bank</td></tr>
+                <tr>
+                  <td className="px-3 py-2 text-slate-700">Dari / ke cabang lain atau Pusat <span className="text-slate-400">(di filter Semua cabang saling meniadakan)</span></td>
+                  <td className="px-3 py-2 text-right tabular-nums text-slate-600">{money(d.transfer.in)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-slate-600">{money(d.transfer.out)}</td>
+                  <td className={cn("px-3 py-2 text-right font-semibold tabular-nums", d.transfer.net < 0 && "text-rose-600")}>{rpMinus(d.transfer.net)}</td>
+                  {compare && <td className="px-3 py-2 text-right tabular-nums text-slate-500">{rpMinus(d.transfer.prev)}</td>}
+                </tr>
+              </>
+            ) : null}
+            {strong("Kenaikan (penurunan) kas bersih", d.net, d.prev.net, "border-t-2 border-slate-300")}
+            {strong("Saldo kas & bank akhir periode", d.closing, d.prev.closing, "bg-emerald-50/50")}
+          </tbody>
+        </table>
+      </div>
+
+      <p className={cn("rounded-xl border p-3 text-xs font-semibold", Math.abs(d.check_diff) < 1 ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-800")}>
+        {Math.abs(d.check_diff) < 1
+          ? `Saldo akhir sama dengan saldo Kas + Bank di Neraca per ${dmy(d.period.to)}.`
+          : `Saldo akhir berbeda Rp ${rp(Math.abs(d.check_diff))} dari saldo awal + arus kas. Laporkan ke tim IT.`}
+      </p>
+      <p className="text-[11px] leading-relaxed text-slate-500">
+        Dihitung sebagai kas &amp; bank:{" "}
+        {d.cash_accounts.map((a, i) => (
+          <span key={a.id}>
+            {i > 0 && ", "}
+            <span className="font-semibold text-slate-700">{a.code} {a.name}</span> <span className="text-slate-400">({a.reason})</span>
+          </span>
+        ))}
+        . Piutang QRIS/EDC baru dihitung saat uangnya masuk ke rekening. Ubah kelompok akun di{" "}
+        <Link to="/finance-ho/coa" className="font-bold text-emerald-700 hover:underline">Master COA</Link>.
+      </p>
+    </div>
+  );
+}
+const FragmentRows = ({ children }) => <>{children}</>;
 
 // ═════════════════════════ Baris untuk ekspor Excel ══════════════════════
 function toRows(type, d, compare) {
@@ -263,6 +375,19 @@ function toRows(type, d, compare) {
   }
   if (type === "aging") {
     return [["Pelanggan", ...d.buckets.map((b) => b.label), "Total", "Tertua (hari)"], ...d.top_customers.map((c) => [c.customer, ...c.buckets, c.amount, c.oldest])];
+  }
+  if (type === "cash-flow") {
+    if (!d.mapped) return [["Belum ada akun kas atau bank"]];
+    const head = ["Kelompok", "Akun", "Masuk", "Keluar", "Bersih", ...(compare ? ["Periode lalu"] : [])];
+    const out = [head, ["", "Saldo kas & bank awal periode", "", "", d.opening, ...(compare ? [d.prev.opening] : [])]];
+    d.sections.forEach((s) => {
+      s.rows.forEach((r) => out.push([s.short, `${r.code} ${r.name}`, r.in, r.out, r.net, ...(compare ? [r.prev_net] : [])]));
+      out.push([s.short, `Kas bersih dari ${s.short.toLowerCase()}`, s.total.in, s.total.out, s.total.net, ...(compare ? [s.total.prev] : [])]);
+    });
+    if (d.transfer.in || d.transfer.out) out.push(["Pindahan", "Dari / ke cabang lain atau Pusat", d.transfer.in, d.transfer.out, d.transfer.net, ...(compare ? [d.transfer.prev] : [])]);
+    out.push(["", "Kenaikan (penurunan) kas bersih", "", "", d.net, ...(compare ? [d.prev.net] : [])]);
+    out.push(["", "Saldo kas & bank akhir periode", "", "", d.closing, ...(compare ? [d.prev.closing] : [])]);
+    return out;
   }
   if (type === "cash-diff") {
     return [["Tanggal", "Cabang", "Seharusnya", "Disetor", "Selisih", "Penjelasan", "Perlakuan"], ...d.rows.map((r) => [r.date, r.outlet_name, r.pos, r.deposited, r.diff, r.explanation, r.treatment])];
@@ -334,9 +459,33 @@ export default function LaporanKeuangan() {
   const active = REPORTS.find((r) => r.id === type);
   const outletName = outlet === "PUSAT" ? "Pusat" : outlets.find((o) => String(o.id) === outlet)?.name || "Semua cabang";
 
+  // PDF: dokumen cetak terpisah (PrintReport), lalu dialog cetak browser
+  const [printing, setPrinting] = useState(false);
+  const printFrom = data?.period?.from || range?.from;
+  const printTo = type === "balance-sheet" || type === "aging" ? data?.as_of : data?.period?.to;
+  useEffect(() => {
+    if (!printing) return undefined;
+    const prevTitle = document.title;
+    // judul dokumen = nama file PDF bawaan
+    document.title = `${PRINT_TITLE[type]} - ${outletName} - ${printTo || ""}`;
+    const done = () => {
+      document.title = prevTitle;
+      setPrinting(false);
+    };
+    window.addEventListener("afterprint", done);
+    const t = setTimeout(() => window.print(), 80);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener("afterprint", done);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [printing]);
+
   return (
     <div className="space-y-5 p-4 sm:p-6">
-      <style>{`@media print { aside, nav, header { display: none !important; } .no-print { display: none !important; } }`}</style>
+      {printing && ready && (
+        <PrintReport type={type} data={data} compare={compare} outletName={outletName} from={printFrom} to={printTo} prevFrom={data?.period?.prev_from} prevTo={data?.period?.prev_to} />
+      )}
 
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
@@ -388,7 +537,7 @@ export default function LaporanKeuangan() {
               </p>
             </div>
             <div className="no-print flex items-center gap-2">
-              {type === "profit-loss" && (
+              {(type === "profit-loss" || type === "cash-flow") && (
                 <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-500">
                   <input type="checkbox" checked={compare} onChange={(e) => setCompare(e.target.checked)} /> Bandingkan periode lalu
                 </label>
@@ -399,7 +548,7 @@ export default function LaporanKeuangan() {
               <button type="button" disabled={!ready} onClick={() => downloadCsv(`${type}-${month}.csv`, toRows(type, data, compare))} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:border-emerald-400 hover:text-emerald-700 disabled:opacity-40">
                 <HiOutlineTableCells className="h-4 w-4" /> Excel
               </button>
-              <button type="button" disabled={!ready} onClick={() => window.print()} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:border-emerald-400 hover:text-emerald-700 disabled:opacity-40">
+              <button type="button" disabled={!ready || printing} onClick={() => setPrinting(true)} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:border-emerald-400 hover:text-emerald-700 disabled:opacity-40">
                 <HiOutlinePrinter className="h-4 w-4" /> PDF
               </button>
             </div>
@@ -415,6 +564,7 @@ export default function LaporanKeuangan() {
               {type === "aging" && <Aging d={data} />}
               {type === "cash-diff" && <CashDiff d={data} />}
               {type === "mdr" && <Mdr d={data} />}
+              {type === "cash-flow" && <CashFlow d={data} compare={compare} glLink={glLink} />}
             </div>
           )}
         </div>

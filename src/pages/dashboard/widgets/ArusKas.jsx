@@ -17,7 +17,7 @@ export default function ArusKas() {
           d && !d.mapped ? (
             <span>
               Akun bank belum dipetakan.
-              <Link to="/finance-ho/pengaturan" className="mt-1 block font-bold text-emerald-700 hover:underline">Buka Pengaturan</Link>
+              <Link to="/finance-ho/pengaturan/rekening-bank" className="mt-1 block font-bold text-emerald-700 hover:underline">Buka Pengaturan</Link>
             </span>
           ) : null
         }

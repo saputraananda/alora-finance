@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { Link } from "react-router-dom";
+import { settingsPath } from "../../settings/sections";
 import ConfirmModal from "../../../components/ui/ConfirmModal";
 import PayModal from "./PayModal";
 import { HiOutlineArrowUpTray, HiOutlineXMark } from "react-icons/hi2";
@@ -271,6 +273,12 @@ export default function RequestDetailModal({ id, onClose, onChanged }) {
           <div className="border-t border-slate-100 bg-slate-50 p-4">
             {notice && <p className="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-700">{notice}</p>}
             {actionError && <p className="mb-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{actionError}</p>}
+            {(paidNoJournal || /belum dipetakan/i.test(`${notice} ${actionError}`)) && (
+              <p className="mb-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                Jurnal belum bisa dibuat bila ada klasifikasi yang belum punya akun. Atur di{" "}
+                <Link to={settingsPath("klasifikasi")} className="font-bold underline">Pengaturan › Klasifikasi Pengajuan</Link>, lalu kembali ke sini dan klik Buat jurnal.
+              </p>
+            )}
             {rejecting ? (
               <div className="space-y-2">
                 <label className="text-[11px] font-bold text-slate-500">Alasan penolakan (wajib)</label>

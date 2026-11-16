@@ -4,7 +4,8 @@ import { api } from "../../lib/api";
 import FinanceOnly from "./components/FinanceOnly";
 import { cn, rp, selectCls, thCls } from "./utils/format";
 
-export default function Klasifikasi() {
+// Dipakai di Pengaturan Umum › Klasifikasi Pengajuan (embedded: tanpa judul & padding halaman)
+export default function Klasifikasi({ embedded = false }) {
   const [rows, setRows] = useState(null);
   const [accounts, setAccounts] = useState([]);
   const [error, setError] = useState("");
@@ -12,8 +13,8 @@ export default function Klasifikasi() {
   const [onlyEmpty, setOnlyEmpty] = useState(false);
 
   useEffect(() => {
-    document.title = "Klasifikasi | HO Finance";
-  }, []);
+    if (!embedded) document.title = "Klasifikasi | HO Finance";
+  }, [embedded]);
 
   const load = useCallback(async () => {
     try {
@@ -51,8 +52,8 @@ export default function Klasifikasi() {
 
   return (
     <FinanceOnly>
-      <div className="space-y-5 p-4 sm:p-6">
-        <div>
+      <div className={embedded ? "space-y-5" : "space-y-5 p-4 sm:p-6"}>
+        {!embedded && <div>
           <p className="text-[11px] font-semibold text-slate-400">Pembelian</p>
           <div className="mt-0.5 flex items-center gap-2">
             <div className="rounded-xl bg-slate-100 p-2 text-slate-700"><HiOutlineTag className="h-5 w-5" /></div>
@@ -62,7 +63,7 @@ export default function Klasifikasi() {
             Kategori biaya yang diisi Finance saat membayar. Tiap klasifikasi dipetakan ke akun supaya pembayaran bisa dijurnal otomatis.
             Pilih akun beban, atau akun aset bila yang dibeli berupa barang yang disusutkan. Pemetaan disimpan di alfi, tidak mengubah SuperApp.
           </p>
-        </div>
+        </div>}
 
         {error && <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{error}</p>}
 

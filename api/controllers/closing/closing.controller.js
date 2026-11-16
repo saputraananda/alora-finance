@@ -212,7 +212,15 @@ export async function getChecklist(req, res) {
         [p.start, p.end]
       ),
       pool.query(`SELECT outlet_id, DATE_FORMAT(rec_date,'%Y-%m-%d') AS d FROM tr_recon_daily WHERE status='APPROVED' AND rec_date BETWEEN ? AND ?`, [p.start, p.end]),
-      pool.query(`SELECT outlet_id, method, DATE_FORMAT(trx_date,'%Y-%m-%d') AS d FROM tr_settlement WHERE trx_date BETWEEN ? AND ?`, [p.start, p.end]),
+      pool
+        .query(
+          `SELECT DISTINCT i.outlet_id, SUBSTRING_INDEX(i.ref_key, '|', -1) AS method, SUBSTRING_INDEX(SUBSTRING_INDEX(i.ref_key, '|', 2), '|', -1) AS d
+           FROM tr_recon_match_item i JOIN tr_recon_match m ON m.id = i.match_id AND m.undone_at IS NULL
+           WHERE i.side = 'INTERNAL' AND i.ref_type = 'POS_ONLINE'
+             AND SUBSTRING_INDEX(SUBSTRING_INDEX(i.ref_key, '|', 2), '|', -1) BETWEEN ? AND ?`,
+          [p.start, p.end]
+        )
+        .catch(() => [[]]),
     ]);
     const posted = new Set(batchRows.map((r) => `${r.outlet_id}|${r.d}`));
     const locked = new Set(lockRows.map((r) => `${r.outlet_id}|${r.d}`));
@@ -278,10 +286,10 @@ export async function getChecklist(req, res) {
       { no: 2, title: "Rekonsiliasi harian selesai (hari dikunci)", status: st(lockedN, total), progress: ratio(lockedN, total), unit: "cabang-hari", link: "/finance-ho/rekonsiliasi" },
       {
         no: 3,
-        title: "Settlement dan rekonsiliasi bank cocok",
+        title: "QRIS/EDC dan mutasi bank sudah dicocokkan",
         status: settleDone === settleTotal && bankStmt.total > 0 && bankStmt.unmatched === 0 ? "DONE" : "PENDING",
         progress: ratio(settleDone, settleTotal),
-        unit: "settlement QRIS/EDC",
+        unit: "QRIS/EDC cabang-hari",
         detail:
           bankStmt.total === 0
             ? "Belum ada mutasi rekening koran diimpor."

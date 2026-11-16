@@ -7,6 +7,7 @@ import {
   getCashDiffReport,
   getMdrReport,
   getAgingReport,
+  getCashFlow,
 } from '../../controllers/reports/reports.controller.js';
 
 const router = express.Router();
@@ -19,5 +20,6 @@ router.get('/reports/balance-sheet', getBalanceSheet);
 router.get('/reports/cash-diff', getCashDiffReport);
 router.get('/reports/mdr', getMdrReport);
 router.get('/reports/aging', getAgingReport);
+router.get('/reports/cash-flow', getCashFlow);
 
 export default router;

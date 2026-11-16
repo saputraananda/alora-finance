@@ -2,6 +2,7 @@ import { useState } from "react";
 import { createPortal } from "react-dom";
 import { HiOutlineXMark } from "react-icons/hi2";
 import { api } from "../lib/api";
+import { CF_HINT, CF_LABEL } from "../lib/cashFlow";
 
 // Modal Form Akun (Bisa Tambah Baru atau Edit)
 export function ModalFormAkun({ account, accounts = [], onClose, onSuccess }) {
@@ -17,6 +18,7 @@ export function ModalFormAkun({ account, accounts = [], onClose, onSuccess }) {
   const [isHeader, setIsHeader] = useState(Boolean(account?.is_header));
   const [memo, setMemo] = useState(account?.memo || "");
   const [isActive, setIsActive] = useState(account?.is_active ?? 1);
+  const [cashFlowGroup, setCashFlowGroup] = useState(account?.cash_flow_group || "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -56,6 +58,7 @@ export function ModalFormAkun({ account, accounts = [], onClose, onSuccess }) {
         is_header: isHeader ? 1 : 0,
         is_active: isActive ? 1 : 0,
         memo: memo.trim(),
+        cash_flow_group: cashFlowGroup || null,
       };
 
       if (isEdit) {
@@ -192,6 +195,28 @@ export function ModalFormAkun({ account, accounts = [], onClose, onSuccess }) {
                   </option>
                 ))}
             </select>
+          </div>
+
+          {/* Kelompok arus kas */}
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1">Kelompok Arus Kas</label>
+            <select
+              value={cashFlowGroup}
+              onChange={(e) => setCashFlowGroup(e.target.value)}
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+            >
+              <option value="">
+                Otomatis{account?.cash_flow?.auto ? ` (${CF_LABEL[account.cash_flow.auto]})` : ""}
+              </option>
+              {Object.entries(CF_LABEL).map(([k, v]) => (
+                <option key={k} value={k}>{v}</option>
+              ))}
+            </select>
+            <p className="mt-1 text-[10px] text-slate-400">
+              {cashFlowGroup
+                ? CF_HINT[cashFlowGroup]
+                : "Ditentukan aplikasi dari pengaturan kas/bank, tipe, dan nama akun. Pilih manual bila hasilnya keliru."}
+            </p>
           </div>
 
           {/* Keterangan */}

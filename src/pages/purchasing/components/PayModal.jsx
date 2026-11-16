@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { Link } from "react-router-dom";
 import { HiOutlineXMark } from "react-icons/hi2";
+import { settingsPath } from "../../settings/sections";
 import { getToken } from "../../../lib/api";
 import { api } from "../../../lib/api";
 import { cn, rp, selectCls } from "../utils/format";
@@ -150,7 +152,10 @@ export default function PayModal({ pr, scope, onClose, onDone }) {
                 </button>
               ))}
             </div>
-            <p className="mt-1 text-[10px] text-slate-400">Garis putus-putus = belum dipetakan ke akun (jurnal ditunda sampai dipetakan di menu Klasifikasi).</p>
+            <p className="mt-1 text-[10px] text-slate-400">
+              Garis putus-putus = belum dipetakan ke akun (jurnal ditunda sampai dipetakan di{" "}
+              <Link to={settingsPath("klasifikasi")} className="font-bold text-emerald-700 hover:underline">Pengaturan › Klasifikasi Pengajuan</Link>).
+            </p>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">

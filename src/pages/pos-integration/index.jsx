@@ -384,7 +384,7 @@ export default function PosIntegration() {
 
       {mapMissing.length > 0 && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-          Pemetaan akun belum lengkap: {mapMissing.map((m) => m.label).join(", ")}. Lengkapi di <Link to="/finance-ho/pengaturan?tab=akun" className="font-bold underline">Pengaturan › Pemetaan akun</Link>.
+          Pemetaan akun belum lengkap: {mapMissing.map((m) => m.label).join(", ")}. Lengkapi di <Link to="/finance-ho/pengaturan/pemetaan-akun" className="font-bold underline">Pengaturan › Pemetaan akun</Link>.
         </div>
       )}
 
@@ -423,7 +423,7 @@ export default function PosIntegration() {
                         <button type="button" onClick={() => r.status !== "KOSONG" && setDetail(r.outlet_id)} className={cn("flex items-center gap-1.5 font-bold text-slate-800", r.status !== "KOSONG" && "hover:text-emerald-700")}>
                           {r.locked && <HiOutlineLockClosed className="h-3.5 w-3.5 text-emerald-600" title="Hari dikunci" />}
                           {r.outlet_name}
-                          {r.is_event && <span className="rounded bg-violet-50 px-1.5 text-[9px] text-violet-700">Event</span>}
+                          {r.is_event && <span className="rounded bg-violet-50 px-1.5 text-[9px] text-violet-700">Event / drop point</span>}
                         </button>
                         <p className="font-mono text-[10px] text-slate-400">{r.batch_code}</p>
                       </td>
@@ -511,7 +511,7 @@ export default function PosIntegration() {
         {showMap && (
           <p className="border-t border-slate-100 px-4 pt-3 text-[11px] text-slate-500">
             Ubah pemetaan layanan dan metode bayar di{" "}
-            <Link to="/finance-ho/pengaturan?tab=akun" className="font-bold text-emerald-700 hover:underline">Pengaturan › Pemetaan akun</Link>.
+            <Link to="/finance-ho/pengaturan/pemetaan-akun" className="font-bold text-emerald-700 hover:underline">Pengaturan › Pemetaan akun</Link>.
           </p>
         )}
         {showMap && (

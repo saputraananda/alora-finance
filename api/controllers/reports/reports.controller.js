@@ -1,6 +1,7 @@
 import { pool, getOutlets } from "../../db/pool.js";
 import { toFixed2 } from "../../utils/currencyHelpers.js";
 import { computeAging } from "../../utils/aging.js";
+import { computeCashFlow, loadCashFlowGroups } from "../../utils/cashFlow.js";
 import { cutoffRange, currentCutoffMonth, shiftMonth } from "../dashboard/dashboard.controller.js";
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -31,6 +32,20 @@ function outletClause(outletId) {
   return { sql: "", params: [] };
 }
 
+// Pembanding: periode cutoff sebelumnya, atau rentang sepanjang sama tepat sebelum tanggal kustom
+function prevRange(p) {
+  if (p.custom) {
+    const days = Math.round((Date.parse(`${p.end}T00:00:00Z`) - Date.parse(`${p.start}T00:00:00Z`)) / 86400000) + 1;
+    const e = new Date(`${p.start}T00:00:00Z`);
+    e.setUTCDate(e.getUTCDate() - 1);
+    const st = new Date(e);
+    st.setUTCDate(st.getUTCDate() - (days - 1));
+    return { start: st.toISOString().slice(0, 10), end: e.toISOString().slice(0, 10) };
+  }
+  const [py, pm] = shiftMonth(p.year, p.month, -1);
+  return cutoffRange(py, pm);
+}
+
 const fail = (res, tag, err) => {
   console.error(`[${tag}]`, err);
   return res.status(500).json({ message: "Gagal menyusun laporan", error: err.message });
@@ -51,19 +66,7 @@ export async function getProfitLoss(req, res) {
       GROUP BY a.id, a.code, a.name, a.type, jl.outlet_id`;
     const [rows] = await pool.query(sql, [p.start, p.end, ...oc.params]);
 
-    // Pembanding: periode cutoff sebelumnya, atau rentang sepanjang sama tepat sebelum tanggal kustom
-    let prev;
-    if (p.custom) {
-      const days = Math.round((Date.parse(`${p.end}T00:00:00Z`) - Date.parse(`${p.start}T00:00:00Z`)) / 86400000) + 1;
-      const e = new Date(`${p.start}T00:00:00Z`);
-      e.setUTCDate(e.getUTCDate() - 1);
-      const st = new Date(e);
-      st.setUTCDate(st.getUTCDate() - (days - 1));
-      prev = { start: st.toISOString().slice(0, 10), end: e.toISOString().slice(0, 10) };
-    } else {
-      const [py, pm] = shiftMonth(p.year, p.month, -1);
-      prev = cutoffRange(py, pm);
-    }
+    const prev = prevRange(p);
     const [prevRows] = await pool.query(sql, [prev.start, prev.end, ...oc.params]);
     const prevBy = new Map();
     prevRows.forEach((r) => prevBy.set(Number(r.id), toFixed2((prevBy.get(Number(r.id)) || 0) + Number(r.amount))));
@@ -241,15 +244,19 @@ export async function getCashDiffReport(req, res) {
   }
 }
 
-// ── Rekap MDR (dari settlement QRIS/EDC) ────────────────────────────────
+// ── Rekap MDR (dari selisih QRIS/EDC yang dijelaskan di Rekonsiliasi Transaksi) ──
 export async function getMdrReport(req, res) {
   try {
     const p = parsePeriod(req.query);
     const useOutlet = p.outletId && p.outletId !== "PUSAT";
     const [rows] = await pool.query(
-      `SELECT outlet_id, provider, COUNT(*) AS n, SUM(gross) AS gross, SUM(mdr) AS mdr, SUM(net) AS net
-       FROM tr_settlement WHERE trx_date BETWEEN ? AND ?${useOutlet ? " AND outlet_id = ?" : ""}
-       GROUP BY outlet_id, provider ORDER BY outlet_id, provider`,
+      `SELECT i.outlet_id, SUBSTRING_INDEX(i.ref_key, '|', -1) AS provider, COUNT(*) AS n, SUM(i.amount) AS gross,
+              SUM(IF(m.status = 'DIFF' AND m.explanation IS NOT NULL AND m.explanation <> '' AND i.amount > i.counter_amount, i.amount - i.counter_amount, 0)) AS mdr,
+              SUM(IF(m.status = 'DIFF' AND m.explanation IS NOT NULL AND m.explanation <> '' AND i.amount > i.counter_amount, i.counter_amount, i.amount)) AS net
+       FROM tr_recon_match_item i JOIN tr_recon_match m ON m.id = i.match_id AND m.undone_at IS NULL
+       WHERE i.side = 'INTERNAL' AND i.ref_type = 'POS_ONLINE'
+         AND STR_TO_DATE(SUBSTRING_INDEX(SUBSTRING_INDEX(i.ref_key, '|', 2), '|', -1), '%Y-%m-%d') BETWEEN ? AND ?${useOutlet ? " AND i.outlet_id = ?" : ""}
+       GROUP BY i.outlet_id, provider ORDER BY i.outlet_id, provider`,
       useOutlet ? [p.start, p.end, p.outletId] : [p.start, p.end]
     );
     const outlets = await getOutlets();
@@ -272,6 +279,47 @@ export async function getMdrReport(req, res) {
     });
   } catch (err) {
     return fail(res, "getMdrReport", err);
+  }
+}
+
+// ── Arus kas (metode langsung, bandingkan periode lalu) ─────────────────
+export async function getCashFlow(req, res) {
+  try {
+    const p = parsePeriod(req.query);
+    const prev = prevRange(p);
+    const groups = await loadCashFlowGroups(pool);
+    const [cur, old] = await Promise.all([
+      computeCashFlow(pool, { start: p.start, end: p.end, outletId: p.outletId }, groups),
+      computeCashFlow(pool, { start: prev.start, end: prev.end, outletId: p.outletId }, groups),
+    ]);
+    const period = { year: p.year, month: p.month, from: p.start, to: p.end, prev_from: prev.start, prev_to: prev.end };
+    if (!cur.mapped) return res.json({ period, mapped: false, cash_accounts: [] });
+
+    // Gabungkan angka periode lalu per akun (akun yang hanya ada di periode lalu tetap tampil)
+    const sections = cur.sections.map((s) => {
+      const o = old.sections.find((x) => x.key === s.key);
+      const byId = new Map(s.rows.map((r) => [r.id, { ...r, prev_net: 0 }]));
+      (o?.rows || []).forEach((r) => {
+        if (byId.has(r.id)) byId.get(r.id).prev_net = r.net;
+        else byId.set(r.id, { ...r, in: 0, out: 0, net: 0, prev_net: r.net });
+      });
+      return { ...s, rows: [...byId.values()].sort((a, b) => a.code.localeCompare(b.code)), total: { ...s.total, prev: o?.total.net || 0 } };
+    });
+    return res.json({
+      period,
+      mapped: true,
+      opening: cur.opening,
+      net: cur.net,
+      closing: cur.closing,
+      check_diff: cur.check_diff,
+      sections,
+      transfer: { ...cur.transfer, prev: old.transfer?.net || 0 },
+      prev: { opening: old.opening, net: old.net, closing: old.closing },
+      entries: cur.entries,
+      cash_accounts: cur.cash_accounts,
+    });
+  } catch (err) {
+    return fail(res, "getCashFlow", err);
   }
 }
 

@@ -9,6 +9,7 @@ import {
 } from "react-icons/hi2";
 import { api } from "../../lib/api";
 import ModalFormAkun from "../../components/ModalFormAkun";
+import { CF_LABEL } from "../../lib/cashFlow";
 
 function cn(...classes) {
   return classes.filter(Boolean).join(" ");
@@ -395,6 +396,18 @@ export default function COA() {
                     {selectedAccount.normal_balance === "DEBIT" ? "Debit" : "Kredit"}
                   </span>
                 </div>
+
+                {selectedAccount.cash_flow && (
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="text-slate-500">Arus kas</span>
+                    <span className="text-right text-slate-800">
+                      {CF_LABEL[selectedAccount.cash_flow.group]}
+                      <span className="block text-[10px] text-slate-400">
+                        {selectedAccount.cash_flow_group ? "dipilih manual" : `otomatis: ${selectedAccount.cash_flow.reason}`}
+                      </span>
+                    </span>
+                  </div>
+                )}
 
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-slate-500">Parent</span>

@@ -25,3 +25,6 @@ uploads/
 # DDL / skema database disimpan di repo privat terpisah (alfi-database), jangan masuk repo ini
 database/
 aiAgent/DDL_alfi.sql
+
+# Arsip rekonsiliasi (file bank, gambar bukti) — bukan untuk repo
+storage/

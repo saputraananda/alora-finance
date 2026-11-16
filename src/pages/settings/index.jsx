@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Link, useSearchParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import ConfirmModal from "../../components/ui/ConfirmModal";
 import SaldoAwal from "./components/SaldoAwal";
+import KategoriPayment from "./components/KategoriPayment";
+import Penomoran from "./components/Penomoran";
+import Klasifikasi from "../purchasing/Klasifikasi";
+import { SETTINGS_SECTIONS } from "./sections";
 import {
   HiOutlineCheckCircle,
-  HiOutlineCog6Tooth,
   HiOutlineExclamationTriangle,
   HiOutlinePencilSquare,
   HiOutlinePlus,
@@ -64,16 +67,11 @@ const Field = ({ label, hint, children }) => (
   </label>
 );
 
-const TABS = [
-  { id: "cabang", label: "Cabang & metode bayar" },
-  { id: "bank", label: "Rekening bank" },
-  { id: "akun", label: "Pemetaan akun" },
-  { id: "saldo", label: "Saldo awal" },
-];
-
 export default function Pengaturan() {
-  const [params] = useSearchParams(); // ?tab=akun dari Integrasi POS
-  const [tab, setTab] = useState(["cabang", "bank", "akun", "saldo"].includes(params.get("tab")) ? params.get("tab") : "cabang");
+  // Bagian dipilih dari anak menu "Pengaturan Umum" di sidebar: /finance-ho/pengaturan/<slug>
+  const slug = useParams()["*"]?.split("/")[0] || "";
+  const cur = SETTINGS_SECTIONS.find((s) => s.slug === slug) || SETTINGS_SECTIONS[0];
+  const tab = cur.id;
   const [confirm, setConfirm] = useState(null); // rekening yang akan dihapus
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -84,6 +82,9 @@ export default function Pengaturan() {
   useEffect(() => {
     document.title = "Pengaturan | HO Finance";
   }, []);
+  useEffect(() => {
+    setMsg(null);
+  }, [tab]);
 
   const load = useCallback(async () => {
     try {
@@ -123,23 +124,19 @@ export default function Pengaturan() {
   };
   const th = "px-3 py-2.5 text-[10px] font-bold uppercase tracking-wider text-slate-400";
 
+  const CurIcon = cur.icon;
+
   return (
-    <div className="space-y-5 p-4 sm:p-6">
+      <div className="space-y-5 p-4 sm:p-6">
       <div>
         <p className="text-[11px] font-semibold text-slate-400">Pengaturan</p>
         <div className="mt-0.5 flex items-center gap-2">
           <div className="rounded-xl bg-slate-100 p-2 text-slate-700">
-            <HiOutlineCog6Tooth className="h-5 w-5" />
+            <CurIcon className="h-5 w-5" />
           </div>
-          <h1 className="text-lg font-extrabold tracking-tight text-slate-800">
-            {TABS.find((t) => t.id === tab).label}
-          </h1>
+          <h1 className="text-lg font-extrabold tracking-tight text-slate-800">{cur.label}</h1>
         </div>
-        <p className="mt-1 text-xs text-slate-500">
-          Cabang baru cukup didaftarkan di POS, lalu diatur akun dan rekeningnya di sini.{" "}
-          Master akun ada di <Link to="/finance-ho/coa" className="font-bold text-emerald-700 hover:underline">Master COA</Link>, anggaran di{" "}
-          <Link to="/finance-ho/anggaran-beban" className="font-bold text-emerald-700 hover:underline">Anggaran Beban</Link>.
-        </p>
+        <p className="mt-1 text-xs text-slate-500">{cur.intro}</p>
       </div>
 
       {msg && (
@@ -149,17 +146,8 @@ export default function Pengaturan() {
         </div>
       )}
 
-      <div className="flex gap-1 border-b border-slate-200">
-        {TABS.map((t) => (
-          <button key={t.id} type="button" onClick={() => setTab(t.id)} className={cn("-mb-px border-b-2 px-4 py-2 text-xs font-bold transition", tab === t.id ? "border-emerald-600 text-emerald-700" : "border-transparent text-slate-400 hover:text-slate-600")}>
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      {/* ───────────── Cabang & metode bayar ───────────── */}
+      {/* ───────────── Cabang ───────────── */}
       {tab === "cabang" && (
-        <div className="space-y-6">
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
@@ -174,7 +162,7 @@ export default function Pengaturan() {
                       <td className="px-3 py-3 font-mono font-bold text-slate-700">{c.code}</td>
                       <td className="px-3 py-3 font-bold text-slate-800">
                         {c.name}
-                        {c.is_event && <span className="ml-1.5 rounded bg-violet-50 px-1.5 text-[9px] text-violet-700">Event</span>}
+                        {c.is_event && <span className="ml-1.5 rounded bg-violet-50 px-1.5 text-[9px] text-violet-700">Event / drop point</span>}
                       </td>
                       <td className="px-3 py-3 text-slate-600">{c.cash_account || <span className="text-slate-400">Bawaan ({data.methods.find((m) => m.code === "TUNAI")?.account || "-"})</span>}</td>
                       <td className="px-3 py-3 text-slate-600">{c.warehouse_code || "-"}</td>
@@ -191,7 +179,10 @@ export default function Pengaturan() {
               </table>
             </div>
           </div>
+      )}
 
+      {/* ───────────── Metode bayar ───────────── */}
+      {tab === "metode" && (
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
@@ -220,11 +211,10 @@ export default function Pengaturan() {
               </table>
             </div>
             <p className="border-t border-slate-100 bg-slate-50/60 px-4 py-2.5 text-[11px] text-slate-500">
-              Tarif MDR dan toleransi dikosongkan; isi sesuai kontrak dan kebijakan. MDR dipakai untuk memeriksa potongan di file settlement
+              Tarif MDR dan toleransi dikosongkan; isi sesuai kontrak dan kebijakan. MDR dipakai untuk memeriksa wajarnya potongan saat selisih QRIS/EDC dijelaskan
               (Rekonsiliasi), toleransi untuk menandai selisih tunai kecil.
             </p>
           </div>
-        </div>
       )}
 
       {/* ───────────── Rekening bank ───────────── */}
@@ -274,6 +264,9 @@ export default function Pengaturan() {
       )}
 
       {/* ───────────── Pemetaan akun ───────────── */}
+      {tab === "kategori" && <KategoriPayment />}
+      {tab === "klasifikasi" && <Klasifikasi embedded />}
+      {tab === "penomoran" && <Penomoran />}
       {tab === "saldo" && <SaldoAwal />}
 
       {tab === "akun" && (data.service_map || []).length > 0 && (
@@ -406,7 +399,7 @@ export default function Pengaturan() {
         >
           {(modal.form.code === "QRIS" || modal.form.code === "EDC") && (
             <div className="grid grid-cols-2 gap-3">
-              <Field label="MDR (%)" hint="Dipakai memeriksa potongan di file settlement"><input type="number" step="0.001" min="0" max="100" className={inputCls} value={modal.form.mdr_percent ?? ""} onChange={(e) => setModal({ ...modal, form: { ...modal.form, mdr_percent: e.target.value } })} placeholder="mis. 0,7" /></Field>
+              <Field label="MDR (%)" hint="Dipakai memeriksa wajarnya potongan MDR (peringatan bila jauh berbeda)"><input type="number" step="0.001" min="0" max="100" className={inputCls} value={modal.form.mdr_percent ?? ""} onChange={(e) => setModal({ ...modal, form: { ...modal.form, mdr_percent: e.target.value } })} placeholder="mis. 0,7" /></Field>
               <Field label="MDR nominal tetap (Rp)" hint="Alternatif bila kontrak berupa nominal"><input type="number" min="0" className={inputCls} value={modal.form.mdr_fixed ?? ""} onChange={(e) => setModal({ ...modal, form: { ...modal.form, mdr_fixed: e.target.value } })} /></Field>
             </div>
           )}
@@ -461,6 +454,6 @@ export default function Pengaturan() {
           </label>
         </Modal>
       )}
-    </div>
+      </div>
   );
 }
