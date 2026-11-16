@@ -2,7 +2,6 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import multer from "multer";
-import ExcelJS from "exceljs";
 import { pool, safeQuery, myWaschenPool, getOutlets, getUserNames } from "../../db/pool.js";
 import { toFixed2 } from "../../utils/currencyHelpers.js";
 import { computeDay, loadAccountMap } from "../pos/pos.controller.js";
@@ -11,12 +10,12 @@ import { loadStartDates, beforeStart, startMessage } from "../../utils/outletSta
 
 // ════════════════════════════════════════════════════════════════════════════
 // REKONSILIASI HARIAN — per cabang, per hari, per metode bayar
-//   POS  =  Setoran tunai / Settlement QRIS & EDC  (+ MDR)
+//   POS  =  uang yang ditemukan di mutasi bank (tunai, QRIS, EDC)  (+ MDR dari selisih yang dijelaskan)
 // Aturan dari "Konsep Akuntansi Laundry Multi-Cabang" (hal. 12–15):
-//   • Tunai dicocokkan dengan bukti setor; QRIS/EDC dengan laporan settlement.
+//   • Tunai, QRIS, dan EDC dicocokkan ke mutasi bank di Rekonsiliasi Transaksi (tidak ada impor settlement).
 //   • Kas kurang → dijelaskan; jadi Selisih Kas / Piutang Karyawan. Kas lebih → Pendapatan Lain.
-//   • MDR otomatis: Dr Beban MDR, Cr Piutang QRIS/EDC.
-//   • Settlement belum cair → tetap di piutang, hari belum bisa dikunci.
+//   • MDR = selisih QRIS/EDC (POS lebih besar dari bank) yang sudah dijelaskan Finance: Dr Beban MDR, Cr Piutang QRIS/EDC.
+//   • QRIS/EDC belum ditemukan di bank → tetap di piutang, hari belum bisa dikunci.
 // ════════════════════════════════════════════════════════════════════════════
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -32,7 +31,7 @@ export const ROLES = {
   PENDAPATAN_LAIN: { label: "Pendapatan Lain-lain", code: "4-1003" },
 };
 
-// ── Upload (slip setoran) & file settlement ─────────────────────────────
+// ── Upload slip setoran (data lama) ─────────────────────────────────────
 const slipUpload = multer({
   storage: multer.diskStorage({
     destination: (_r, _f, cb) => cb(null, UPLOAD_DIR),
@@ -47,18 +46,9 @@ const slipUpload = multer({
     cb(ok ? null : new Error("Slip harus berupa JPG, PNG, WEBP, atau PDF (maks. 5 MB)."), ok);
   },
 });
-const memUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 8 * 1024 * 1024 },
-  fileFilter: (_r, file, cb) => {
-    const ok = /\.(csv|xlsx)$/i.test(file.originalname);
-    cb(ok ? null : new Error("File settlement harus berformat CSV atau XLSX."), ok);
-  },
-});
 const wrap = (mw) => (req, res, next) =>
   mw(req, res, (err) => (err ? res.status(422).json({ message: err.message }) : next()));
 export const slipMiddleware = wrap(slipUpload.single("file"));
-export const settlementFileMiddleware = wrap(memUpload.single("file"));
 
 export function uploadSlip(req, res) {
   if (!req.file) return res.status(422).json({ message: "File tidak ditemukan." });
@@ -70,7 +60,6 @@ const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || "")) && !Number.isN
 const yymmdd = (d) => `${d.slice(2, 4)}${d.slice(5, 7)}${d.slice(8, 10)}`;
 const num = (v) => toFixed2(v || 0);
 const near = (a, b) => Math.abs(a - b) <= TOLERANCE;
-const methodOf = (provider) => (String(provider).trim().toUpperCase().startsWith("QRIS") ? "QRIS" : "EDC");
 
 async function loadRoles() {
   const map = await loadAccountMap();
@@ -91,24 +80,45 @@ async function buildDay(date) {
   const codeRows = await myWaschenPool.query(`SELECT id, outlet_code FROM mst_outlet`).then(([r]) => r).catch(() => []);
   const codeOf = new Map(codeRows.map((r) => [Number(r.id), r.outlet_code]));
 
-  const [[deps], [sets], [dailies], [postedRows]] = await Promise.all([
+  const [[deps], [sets], [dailies], [postedRows], [bankCash]] = await Promise.all([
     pool.query(`SELECT * FROM tr_cash_deposit WHERE sales_date = ?`, [date]),
-    pool.query(
-      `SELECT outlet_id, method, COUNT(*) AS n, SUM(gross) AS gross, SUM(mdr) AS mdr, SUM(net) AS net,
-              MIN(settle_date) AS settle_date
-       FROM tr_settlement WHERE trx_date = ? GROUP BY outlet_id, method`,
-      [date]
-    ),
+    // QRIS/EDC yang sudah dicocokkan ke mutasi bank (Rekonsiliasi Transaksi). counter_amount = bagian nominal bank untuk baris ini.
+    // Selisih (POS lebih besar dari bank) yang sudah dijelaskan pada pencocokan DIFF dianggap potongan MDR.
+    pool
+      .query(
+        `SELECT i.outlet_id, SUBSTRING_INDEX(i.ref_key, '|', -1) AS method, SUM(i.amount) AS matched_pos, SUM(i.counter_amount) AS bank_amount,
+                MAX(m.status = 'DIFF' AND m.explanation IS NOT NULL AND m.explanation <> '') AS explained
+         FROM tr_recon_match_item i JOIN tr_recon_match m ON m.id = i.match_id AND m.undone_at IS NULL
+         WHERE i.side = 'INTERNAL' AND i.ref_type = 'POS_ONLINE' AND i.ref_key LIKE CONCAT('%|', DATE_FORMAT(?, '%Y-%m-%d'), '|%')
+         GROUP BY i.outlet_id, method`,
+        [date]
+      )
+      .catch(() => [[]]),
     pool.query(`SELECT * FROM tr_recon_daily WHERE rec_date = ?`, [date]),
     pool.query(
       `SELECT b.outlet_id FROM tr_pos_batch b JOIN tr_journal_entries je ON je.id = b.journal_id
        WHERE b.batch_date = ? AND je.status = 'POSTED'`,
       [date]
     ),
+    // Bukti tunai baru: penjualan tunai cabang+tanggal ini yang sudah dicocokkan ke mutasi bank (Rekonsiliasi Transaksi).
+    // counter_amount = bagian nominal bank yang diatribusikan ke penjualan tunai ini.
+    pool
+      .query(
+        `SELECT i.outlet_id, SUM(i.counter_amount) AS bank_amount
+         FROM tr_recon_match_item i JOIN tr_recon_match m ON m.id = i.match_id AND m.undone_at IS NULL
+         WHERE i.side = 'INTERNAL' AND i.ref_type = 'POS_CASH' AND i.ref_key = CONCAT(i.outlet_id, '|', DATE_FORMAT(?, '%Y-%m-%d'))
+         GROUP BY i.outlet_id`,
+        [date]
+      )
+      .catch(() => [[]]), // tabel pencocokan belum ada (migrasi 004 belum dijalankan): pakai setoran lama saja
   ]);
   const postedSet = new Set(postedRows.map((r) => Number(r.outlet_id)));
   const userNames = await getUserNames(dailies.flatMap((d) => [d.explanation_by, d.requested_by]));
   const depBy = new Map(deps.map((d) => [Number(d.outlet_id), d]));
+  // Setoran manual lama (tr_cash_deposit) tetap dipakai bila ada; bila tidak, pakai mutasi bank yang dicocokkan
+  bankCash.forEach((b) => {
+    if (!depBy.has(Number(b.outlet_id))) depBy.set(Number(b.outlet_id), { amount: Number(b.bank_amount), deposit_date: date, proof_url: null, notes: "Mutasi bank yang dicocokkan", from_bank: true });
+  });
   const setBy = new Map(sets.map((s) => [`${s.outlet_id}|${s.method}`, s]));
   const dailyBy = new Map(dailies.map((d) => [Number(d.outlet_id), d]));
   const outletName = new Map(outlets.map((o) => [o.id, o.name]));
@@ -142,19 +152,23 @@ async function buildDay(date) {
     const settle = (key, label, posAmount) => {
       const s = setBy.get(`${oid}|${key}`);
       if (posAmount === 0 && !s) return { key, label, pos: 0, bank: null, mdr: 0, diff: 0, status: "KOSONG" };
-      if (!s) return { key, label, pos: posAmount, bank: null, mdr: 0, diff: 0, status: "BELUM", note: "Belum cair" };
-      const net = num(s.net);
-      const mdr = num(s.mdr);
-      const diff = toFixed2(net + mdr - posAmount);
+      if (!s || num(s.matched_pos) < posAmount - TOLERANCE) {
+        return { key, label, pos: posAmount, bank: null, mdr: 0, diff: 0, status: "BELUM", note: s ? "Baru sebagian dicocokkan ke bank" : "Belum ditemukan di bank" };
+      }
+      const bank = num(s.bank_amount);
+      const short = toFixed2(posAmount - bank); // > 0: bank menerima lebih sedikit dari POS
+      const explained = Number(s.explained) === 1;
+      const mdr = short > TOLERANCE && explained ? short : 0; // selisih yang dijelaskan Finance = potongan MDR
+      const diff = toFixed2(bank + mdr - posAmount);
       const pct = cfg.get(key)?.mdr_percent;
-      const expected = pct == null ? null : toFixed2((s.gross ? Number(s.gross) : posAmount) * Number(pct) / 100);
-      const mdrWarn = expected != null && Math.abs(mdr - expected) > Math.max(10, expected * 0.02);
+      const expected = pct == null ? null : toFixed2(posAmount * Number(pct) / 100);
+      const mdrWarn = mdr > 0 && expected != null && Math.abs(mdr - expected) > Math.max(10, expected * 0.02);
       return {
-        key, label, pos: posAmount, bank: net, mdr, diff,
+        key, label, pos: posAmount, bank, mdr, diff,
         mdr_expected: expected, mdr_warn: mdrWarn,
-        status: near(net + mdr, posAmount) ? "COCOK" : "SELISIH",
-        settle_date: s.settle_date ? String(s.settle_date).slice(0, 10) : null,
-        gross: num(s.gross),
+        status: near(bank + mdr, posAmount) ? "COCOK" : "SELISIH",
+        note: short > TOLERANCE && !explained ? "Selisih belum dijelaskan" : bank > posAmount + TOLERANCE ? "Bank lebih besar dari POS" : undefined,
+        gross: posAmount,
       };
     };
     const qris = settle("QRIS", "QRIS", num(row.payments.PIUTANG_QRIS));
@@ -172,11 +186,11 @@ async function buildDay(date) {
     const blockers = [];
     const treatment = daily?.treatment || "SELISIH_KAS";
     const explanation = daily?.explanation || "";
-    if (tunai.status === "BELUM") blockers.push("Tunai belum disetor. Catat setoran di tab Setoran kas.");
-    if (qris.status === "BELUM") blockers.push("Settlement QRIS belum cair / belum diimpor.");
-    if (edc.status === "BELUM") blockers.push("Settlement EDC belum cair / belum diimpor.");
-    if (qris.status === "SELISIH") blockers.push("Selisih QRIS harus diselesaikan dulu (periksa file settlement).");
-    if (edc.status === "SELISIH") blockers.push("Selisih EDC harus diselesaikan dulu (periksa file settlement).");
+    if (tunai.status === "BELUM") blockers.push("Tunai belum ditemukan di mutasi bank. Cocokkan di Rekonsiliasi Transaksi.");
+    for (const m of [qris, edc]) {
+      if (m.status === "BELUM") blockers.push(`${m.label} belum ditemukan di mutasi bank. Cocokkan di Rekonsiliasi Transaksi.`);
+      if (m.status === "SELISIH") blockers.push(`Selisih ${m.label} harus dijelaskan dulu di Rekonsiliasi Transaksi (mis. potongan MDR).`);
+    }
     if (tunai.status === "SELISIH" && !explanation.trim()) blockers.push("Selisih tunai harus dijelaskan dulu.");
     if (daily?.explain_requested) blockers.push(`Penjelasan ulang diminta${daily.request_note ? `: "${daily.request_note}"` : ""}.`);
     const missingRoles = [];
@@ -206,7 +220,7 @@ async function buildDay(date) {
       for (const m of [qris, edc]) {
         if (m.status === "KOSONG") continue;
         const role = m.key === "QRIS" ? "PIUTANG_QRIS" : "PIUTANG_EDC";
-        add("BANK", m.bank, 0, `Settlement ${m.label}`);
+        add("BANK", m.bank, 0, `Penerimaan ${m.label} di bank`);
         add("BEBAN_MDR", m.mdr, 0, `MDR ${m.label}`);
         add(role, 0, toFixed2(m.bank + m.mdr), `Pelunasan piutang ${m.label}`);
       }
@@ -513,292 +527,4 @@ export async function deleteDeposit(req, res) {
   } catch (err) {
     return res.status(500).json({ message: "Gagal menghapus setoran", error: err.message });
   }
-}
-
-// ═══════════════════════════ SETTLEMENT QRIS / EDC ═══════════════════════
-const HEADER_ALIASES = {
-  settle_date: ["tanggal_cair", "tgl_cair", "cair", "settle_date", "settlement_date", "tanggal_settlement"],
-  provider: ["penyedia", "provider", "mesin", "merchant", "acquirer"],
-  trx_date: ["tanggal_transaksi", "tgl_transaksi", "transaksi", "trx_date", "transaction_date"],
-  outlet: ["cabang", "kode_cabang", "outlet", "kode_outlet"],
-  gross: ["bruto", "gross", "total", "nominal"],
-  mdr: ["mdr", "fee", "biaya", "potongan"],
-  net: ["neto", "net", "nett", "diterima"],
-};
-
-const normHeader = (h) => String(h ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
-
-function mapHeaders(headerRow) {
-  const idx = {};
-  headerRow.forEach((h, i) => {
-    const n = normHeader(h);
-    for (const [key, aliases] of Object.entries(HEADER_ALIASES)) {
-      if (idx[key] === undefined && aliases.includes(n)) idx[key] = i;
-    }
-  });
-  return idx;
-}
-
-function parseCsv(text) {
-  const clean = text.replace(/^﻿/, "");
-  const first = clean.split(/\r?\n/)[0] || "";
-  const delim = (first.match(/;/g) || []).length >= (first.match(/,/g) || []).length ? ";" : ",";
-  const rows = [];
-  let row = [];
-  let cur = "";
-  let q = false;
-  for (let i = 0; i < clean.length; i++) {
-    const ch = clean[i];
-    if (q) {
-      if (ch === '"' && clean[i + 1] === '"') { cur += '"'; i++; }
-      else if (ch === '"') q = false;
-      else cur += ch;
-    } else if (ch === '"') q = true;
-    else if (ch === delim) { row.push(cur); cur = ""; }
-    else if (ch === "\n" || ch === "\r") {
-      if (ch === "\r" && clean[i + 1] === "\n") i++;
-      row.push(cur); cur = "";
-      if (row.some((c) => c.trim() !== "")) rows.push(row);
-      row = [];
-    } else cur += ch;
-  }
-  row.push(cur);
-  if (row.some((c) => c.trim() !== "")) rows.push(row);
-  return rows;
-}
-
-async function parseXlsx(buffer) {
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(buffer);
-  const ws = wb.worksheets[0];
-  if (!ws) return [];
-  const rows = [];
-  ws.eachRow({ includeEmpty: false }, (r) => {
-    const vals = [];
-    r.eachCell({ includeEmpty: true }, (c, col) => {
-      let v = c.value;
-      if (v && typeof v === "object" && !(v instanceof Date)) v = v.result ?? v.text ?? (v.richText ? v.richText.map((t) => t.text).join("") : "");
-      vals[col - 1] = v;
-    });
-    rows.push(vals);
-  });
-  return rows;
-}
-
-function parseDateCell(v) {
-  if (v instanceof Date) {
-    const d = new Date(v.getTime() + 12 * 3600 * 1000); // hindari geser zona waktu
-    return d.toISOString().slice(0, 10);
-  }
-  const s = String(v ?? "").trim();
-  if (!s) return null;
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
-  const m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})/);
-  if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
-  return null;
-}
-
-function parseMoney(v) {
-  if (typeof v === "number") return toFixed2(v);
-  const s = String(v ?? "").trim();
-  if (!s) return null;
-  const neg = /^\(.*\)$/.test(s) || s.startsWith("-");
-  // Format Indonesia: titik = ribuan, koma = desimal
-  const cleaned = s.replace(/[^\d.,]/g, "");
-  const normalized = cleaned.includes(",") ? cleaned.replace(/\./g, "").replace(",", ".") : cleaned.replace(/\./g, "");
-  const n = parseFloat(normalized);
-  if (Number.isNaN(n)) return null;
-  return toFixed2(neg ? -n : n);
-}
-
-// ── POST /rekon/settlements/import (multipart: file) ────────────────────
-export async function importSettlements(req, res) {
-  try {
-    if (!req.file) return res.status(422).json({ message: "Pilih file settlement (CSV atau XLSX)." });
-    const isXlsx = /\.xlsx$/i.test(req.file.originalname);
-    const table = isXlsx ? await parseXlsx(req.file.buffer) : parseCsv(req.file.buffer.toString("utf8"));
-    if (table.length < 2) return res.status(422).json({ message: "File kosong atau tidak ada baris data." });
-
-    const idx = mapHeaders(table[0]);
-    const required = ["provider", "trx_date", "outlet", "gross"];
-    const missing = required.filter((k) => idx[k] === undefined);
-    if (missing.length) {
-      return res.status(422).json({
-        message: `Kolom wajib tidak ditemukan: ${missing.join(", ")}. Unduh template untuk contoh format.`,
-      });
-    }
-
-    const outletsRaw = await myWaschenPool.query(`SELECT id, outlet_code, name FROM mst_outlet`).then(([r]) => r);
-    const byKey = new Map();
-    outletsRaw.forEach((o) => {
-      byKey.set(String(o.outlet_code).trim().toLowerCase(), Number(o.id));
-      byKey.set(String(o.name).trim().toLowerCase(), Number(o.id));
-    });
-
-    let inserted = 0;
-    let duplicate = 0;
-    const errors = [];
-    for (let r = 1; r < table.length; r++) {
-      const row = table[r];
-      const line = r + 1;
-      const get = (k) => (idx[k] === undefined ? undefined : row[idx[k]]);
-      const provider = String(get("provider") ?? "").trim();
-      const trx = parseDateCell(get("trx_date"));
-      const settle = parseDateCell(get("settle_date"));
-      const oid = byKey.get(String(get("outlet") ?? "").trim().toLowerCase());
-      let gross = parseMoney(get("gross"));
-      let mdr = parseMoney(get("mdr"));
-      let net = parseMoney(get("net"));
-      if (!provider || !trx || !oid || gross === null) {
-        errors.push(`Baris ${line}: ${!provider ? "penyedia kosong" : !trx ? "tanggal transaksi tidak valid" : !oid ? `cabang "${get("outlet")}" tidak dikenal` : "bruto tidak valid"}.`);
-        continue;
-      }
-      if (mdr === null && net === null) { errors.push(`Baris ${line}: isi minimal MDR atau neto.`); continue; }
-      if (net === null) net = toFixed2(gross - mdr);
-      if (mdr === null) mdr = toFixed2(gross - net);
-      if (!near(gross, net + mdr)) { errors.push(`Baris ${line}: bruto ≠ neto + MDR.`); continue; }
-      if (await isLocked(oid, trx)) { errors.push(`Baris ${line}: hari ${trx} sudah dikunci.`); continue; }
-
-      const [ins] = await pool.query(
-        `INSERT IGNORE INTO tr_settlement (outlet_id, method, provider, trx_date, settle_date, gross, mdr, net, source, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'IMPOR', ?)`,
-        [oid, methodOf(provider), provider.slice(0, 60), trx, settle, gross, mdr, net, req.user?.id || null]
-      );
-      if (ins.affectedRows) inserted++;
-      else duplicate++;
-    }
-    return res.status(errors.length && !inserted ? 422 : 201).json({
-      message: `${inserted} baris diimpor${duplicate ? `, ${duplicate} duplikat dilewati` : ""}${errors.length ? `, ${errors.length} baris bermasalah` : ""}.`,
-      inserted,
-      duplicate,
-      errors: errors.slice(0, 20),
-    });
-  } catch (err) {
-    console.error("[importSettlements]", err);
-    return res.status(500).json({ message: "Gagal mengimpor settlement", error: err.message });
-  }
-}
-
-// ── GET /rekon/settlements?from=&to=&outlet= ────────────────────────────
-export async function getSettlements(req, res) {
-  try {
-    const { from, to, outlet } = req.query;
-    if (!isDate(from) || !isDate(to)) return res.status(422).json({ message: "Rentang tanggal tidak valid." });
-    const params = [from, to];
-    let cond = "";
-    if (outlet) {
-      cond = " AND s.outlet_id = ?";
-      params.push(Number(outlet));
-    }
-    const [rows] = await pool.query(
-      `SELECT s.id, s.outlet_id, s.method, s.provider, s.gross, s.mdr, s.net, s.source,
-              DATE_FORMAT(s.trx_date,'%Y-%m-%d') AS trx_date, DATE_FORMAT(s.settle_date,'%Y-%m-%d') AS settle_date,
-              (SELECT status FROM tr_recon_daily d WHERE d.outlet_id = s.outlet_id AND d.rec_date = s.trx_date) AS day_status
-       FROM tr_settlement s
-       WHERE s.trx_date BETWEEN ? AND ?${cond}
-       ORDER BY s.trx_date DESC, s.outlet_id, s.id DESC`,
-      params
-    );
-    const outlets = await getOutlets();
-    const nameOf = new Map(outlets.map((o) => [o.id, o.name]));
-
-    // Status per baris terhadap POS (Referensi hal. 12): jumlah bruto per cabang+tanggal+metode dibandingkan
-    // dengan pembayaran QRIS/EDC di POS pada hari itu.
-    const [posRows] = await myWaschenPool.query(
-      `SELECT t.outlet_id, DATE_FORMAT(l.created_at,'%Y-%m-%d') AS d,
-              SUM(CASE WHEN l.payment_method LIKE 'QRIS%' THEN l.amount ELSE 0 END) AS qris,
-              SUM(CASE WHEN l.payment_method LIKE 'EDC%' THEN l.amount ELSE 0 END) AS edc
-       FROM tr_payment_log l JOIN tr_transaction t ON t.id = l.transaction_id
-       WHERE l.created_at >= ? AND l.created_at < DATE_ADD(?, INTERVAL 1 DAY)
-         AND l.log_type IN ('DP','Lunas','Pelunasan') AND t.is_delete_requested = 0
-       GROUP BY t.outlet_id, d`,
-      [from, to]
-    );
-    const posBy = new Map();
-    posRows.forEach((r) => {
-      posBy.set(`${r.outlet_id}|QRIS|${r.d}`, num(r.qris));
-      posBy.set(`${r.outlet_id}|EDC|${r.d}`, num(r.edc));
-    });
-    const groupGross = new Map();
-    rows.forEach((r) => {
-      const k = `${r.outlet_id}|${r.method}|${r.trx_date}`;
-      groupGross.set(k, toFixed2((groupGross.get(k) || 0) + Number(r.gross)));
-    });
-    const [cfgRows] = await pool.query(`SELECT code, mdr_percent FROM mst_payment_method`);
-    const pctOf = new Map(cfgRows.map((c) => [c.code, c.mdr_percent == null ? null : Number(c.mdr_percent)]));
-
-    rows.forEach((r) => {
-      r.outlet_name = nameOf.get(Number(r.outlet_id)) || `Outlet #${r.outlet_id}`;
-      r.locked = r.day_status === "APPROVED";
-      const k = `${r.outlet_id}|${r.method}|${r.trx_date}`;
-      r.pos_amount = posBy.get(k) ?? 0;
-      r.group_gross = groupGross.get(k) || 0;
-      r.match_status = !r.settle_date ? "BELUM_CAIR" : near(r.group_gross, r.pos_amount) ? "COCOK" : "SELISIH";
-      const pct = pctOf.get(r.method);
-      const expected = pct == null ? null : toFixed2((Number(r.gross) * pct) / 100);
-      r.mdr_expected = expected;
-      r.mdr_warn = expected != null && Math.abs(Number(r.mdr) - expected) > Math.max(10, expected * 0.02);
-    });
-    return res.json({ data: rows, outlets });
-  } catch (err) {
-    return res.status(500).json({ message: "Gagal memuat settlement", error: err.message });
-  }
-}
-
-// ── POST /rekon/settlements — input satu baris manual ───────────────────
-export async function addSettlement(req, res) {
-  try {
-    const { outlet_id, provider, trx_date, settle_date, gross, mdr, net } = req.body || {};
-    if (!outlet_id || !provider || !isDate(trx_date)) return res.status(422).json({ message: "Cabang, penyedia, dan tanggal transaksi wajib diisi." });
-    if (settle_date && !isDate(settle_date)) return res.status(422).json({ message: "Tanggal cair tidak valid." });
-    const g = toFixed2(gross);
-    if (!(g > 0)) return res.status(422).json({ message: "Bruto harus lebih dari 0." });
-    let m = mdr === "" || mdr == null ? null : toFixed2(mdr);
-    let n = net === "" || net == null ? null : toFixed2(net);
-    if (m === null && n === null) return res.status(422).json({ message: "Isi MDR atau neto." });
-    if (n === null) n = toFixed2(g - m);
-    if (m === null) m = toFixed2(g - n);
-    if (!near(g, n + m)) return res.status(422).json({ message: "Bruto harus sama dengan neto + MDR." });
-    if (await isLocked(outlet_id, trx_date)) return res.status(422).json({ message: "Hari ini sudah dikunci." });
-
-    const [ins] = await pool.query(
-      `INSERT IGNORE INTO tr_settlement (outlet_id, method, provider, trx_date, settle_date, gross, mdr, net, source, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'MANUAL', ?)`,
-      [outlet_id, methodOf(provider), String(provider).trim().slice(0, 60), trx_date, settle_date || null, g, m, n, req.user?.id || null]
-    );
-    if (!ins.affectedRows) return res.status(422).json({ message: "Baris yang sama sudah ada." });
-    return res.status(201).json({ message: "Settlement ditambahkan." });
-  } catch (err) {
-    return res.status(500).json({ message: "Gagal menambah settlement", error: err.message });
-  }
-}
-
-// ── DELETE /rekon/settlements/:id ───────────────────────────────────────
-export async function deleteSettlement(req, res) {
-  try {
-    const [r] = await pool.query(`SELECT outlet_id, DATE_FORMAT(trx_date,'%Y-%m-%d') AS d FROM tr_settlement WHERE id=?`, [req.params.id]);
-    if (!r[0]) return res.status(404).json({ message: "Data tidak ditemukan." });
-    if (await isLocked(r[0].outlet_id, r[0].d)) return res.status(422).json({ message: "Hari ini sudah dikunci." });
-    await pool.query(`DELETE FROM tr_settlement WHERE id=?`, [req.params.id]);
-    return res.json({ message: "Baris settlement dihapus." });
-  } catch (err) {
-    return res.status(500).json({ message: "Gagal menghapus", error: err.message });
-  }
-}
-
-// ── GET /rekon/settlements/template ─────────────────────────────────────
-export async function settlementTemplate(_req, res) {
-  const outlets = await getOutlets();
-  const code = (await myWaschenPool.query(`SELECT outlet_code FROM mst_outlet ORDER BY id LIMIT 1`).then(([r]) => r[0]?.outlet_code).catch(() => null)) || "RH";
-  const csv =
-    "﻿" +
-    [
-      "tanggal_cair;penyedia;tanggal_transaksi;cabang;bruto;mdr;neto",
-      `2026-11-02;QRIS;2026-11-01;${code};2500000;17500;2482500`,
-      `2026-11-02;EDC BCA;2026-11-01;${code};700000;7000;693000`,
-    ].join("\r\n");
-  res.setHeader("Content-Type", "text/csv; charset=utf-8");
-  res.setHeader("Content-Disposition", 'attachment; filename="template-settlement.csv"');
-  void outlets;
-  return res.send(csv);
 }

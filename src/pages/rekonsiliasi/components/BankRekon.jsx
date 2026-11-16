@@ -194,7 +194,7 @@ export default function BankRekon() {
 
       {data && !data.banks.length && (
         <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-          Belum ada rekening bank aktif. Tambahkan di <Link to="/finance-ho/pengaturan?tab=bank" className="font-bold underline">Pengaturan › Rekening bank</Link>.
+          Belum ada rekening bank aktif. Tambahkan di <Link to="/finance-ho/pengaturan/rekening-bank" className="font-bold underline">Pengaturan › Rekening bank</Link>.
         </p>
       )}
 
@@ -202,7 +202,7 @@ export default function BankRekon() {
         <>
           {!data.bank.account && (
             <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-              Rekening ini belum punya akun COA, jadi saldo sistem dan pencocokan tidak bisa dihitung. Atur di <Link to="/finance-ho/pengaturan?tab=bank" className="font-bold underline">Pengaturan › Rekening bank</Link>.
+              Rekening ini belum punya akun COA, jadi saldo sistem dan pencocokan tidak bisa dihitung. Atur di <Link to="/finance-ho/pengaturan/rekening-bank" className="font-bold underline">Pengaturan › Rekening bank</Link>.
             </p>
           )}
           {data.bank.shared_coa && (
@@ -262,7 +262,16 @@ export default function BankRekon() {
                     data.rows.map((r) => (
                       <tr key={r.id} className="hover:bg-slate-50/60">
                         <td className="px-3 py-2.5 tabular-nums text-slate-500">{dm(r.date)}</td>
-                        <td className="px-3 py-2.5 font-semibold text-slate-800">{r.description}</td>
+                        <td className="px-3 py-2.5 font-semibold text-slate-800">
+                          {r.description}
+                          {(r.recon_code || r.bank_code || r.excel_row) && (
+                            <div className="mt-1 flex flex-wrap items-center gap-1 font-normal">
+                              {r.bank_code && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500" title="Kode transaksi bank">{r.bank_code}</span>}
+                              {r.recon_code && <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-600" title="Rekon Code (dibuat sistem)">{r.recon_code}</span>}
+                              {r.excel_row && <span className="text-[10px] text-slate-400" title="Nomor baris di file Excel asal">baris {r.excel_row}</span>}
+                            </div>
+                          )}
+                        </td>
                         <td className={cn("px-3 py-2.5 text-right font-semibold tabular-nums", r.amount < 0 && "text-rose-600")}>{signed(r.amount)}</td>
                         <td className="px-3 py-2.5 text-[11px] text-slate-600">{r.matches.length ? r.matches.map((m) => m.entry_no).join(", ") : "-"}</td>
                         <td className="px-3 py-2.5">
