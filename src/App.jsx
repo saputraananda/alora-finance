@@ -21,7 +21,28 @@ import AsetTetap from './pages/fixed-assets';
 import Pengajuan from './pages/purchasing/Pengajuan';
 import Pembayaran from './pages/purchasing/Pembayaran';
 import Kredit from './pages/purchasing/Kredit';
-import Klasifikasi from './pages/purchasing/Klasifikasi';
+
+// Halaman HO Finance. Path RELATIF terhadap "/finance-ho/*": dirender oleh FinanceLayout sebagai tab
+// (tiap tab membawa alamatnya sendiri), sehingga halaman yang tidak aktif tetap hidup di belakang layar.
+const FINANCE_ROUTES = [
+  { path: 'dashboard', element: <DashboardFinance /> },
+  { path: 'integrasi-pos', element: <PosIntegration /> },
+  { path: 'pengaturan/*', element: <Pengaturan /> },
+  { path: 'laporan', element: <LaporanKeuangan /> },
+  { path: 'pelanggan/deposit', element: <DepositMember /> },
+  { path: 'tutup-buku', element: <TutupBuku /> },
+  { path: 'pembelian/pengajuan', element: <Pengajuan /> },
+  { path: 'pembelian/pembayaran', element: <Pembayaran /> },
+  { path: 'pembelian/kredit', element: <Kredit /> },
+  { path: 'aset-tetap', element: <AsetTetap /> },
+  { path: 'rekonsiliasi', element: <Rekonsiliasi /> },
+  { path: 'jurnal-umum', element: <JurnalUmum /> },
+  { path: 'jurnal-umum/baru', element: <JurnalManual /> },
+  { path: 'jurnal-umum/:id/ubah', element: <JurnalManual /> },
+  { path: 'buku-besar', element: <BukuBesar /> },
+  { path: 'coa', element: <COA /> },
+  { path: 'anggaran-beban', element: <AnggaranBeban /> },
+];
 
 function App() {
   return (
@@ -37,27 +58,8 @@ function App() {
           <Route element={<ProtectedRoute />}>
             <Route path="/" element={<Home />} />
             <Route path="/finance-ho" element={<Navigate to="/" replace />} />
-            <Route element={<FinanceLayout />}>
-              <Route path="/finance-ho/dashboard" element={<DashboardFinance />} />
-              <Route path="/finance-ho/integrasi-pos" element={<PosIntegration />} />
-              <Route path="/finance-ho/pengaturan" element={<Pengaturan />} />
-              <Route path="/finance-ho/laporan" element={<LaporanKeuangan />} />
-              <Route path="/finance-ho/pelanggan/deposit" element={<DepositMember />} />
-              <Route path="/finance-ho/tutup-buku" element={<TutupBuku />} />
-              <Route path="/finance-ho/pembelian" element={<Navigate to="/finance-ho/pembelian/pengajuan" replace />} />
-              <Route path="/finance-ho/pembelian/pengajuan" element={<Pengajuan />} />
-              <Route path="/finance-ho/pembelian/pembayaran" element={<Pembayaran />} />
-              <Route path="/finance-ho/pembelian/kredit" element={<Kredit />} />
-              <Route path="/finance-ho/pembelian/klasifikasi" element={<Klasifikasi />} />
-              <Route path="/finance-ho/aset-tetap" element={<AsetTetap />} />
-              <Route path="/finance-ho/rekonsiliasi" element={<Rekonsiliasi />} />
-              <Route path="/finance-ho/jurnal-umum" element={<JurnalUmum />} />
-              <Route path="/finance-ho/jurnal-umum/baru" element={<JurnalManual />} />
-              <Route path="/finance-ho/jurnal-umum/:id/ubah" element={<JurnalManual />} />
-              <Route path="/finance-ho/buku-besar" element={<BukuBesar />} />
-              <Route path="/finance-ho/coa" element={<COA />} />
-              <Route path="/finance-ho/anggaran-beban" element={<AnggaranBeban />} />
-            </Route>
+            <Route path="/finance-ho/pembelian" element={<Navigate to="/finance-ho/pembelian/pengajuan" replace />} />
+            <Route path="/finance-ho/*" element={<FinanceLayout routes={FINANCE_ROUTES} />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/login" replace />} />

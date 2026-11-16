@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useParams } from "react-router-dom";
+import { useTabDirty, useTabs } from "../../lib/tabs";
 import {
   HiOutlineArrowLeft,
   HiOutlineBookOpen,
@@ -169,6 +170,17 @@ export default function FormJurnalManual() {
   const [error, setError] = useState("");
   const [seeding, setSeeding] = useState(false);
 
+  // Tab: tandai "belum disimpan" bila isian berbeda dari kondisi awal (setelah data selesai dimuat)
+  const { key: tabKey, closeTab } = useTabs();
+  const baseline = useRef(null);
+  const sawLoading = useRef(false);
+  const snapshot = JSON.stringify({ entryDate, description, outletId, lines, attachment });
+  useEffect(() => {
+    if (loading) sawLoading.current = true;
+    else if (sawLoading.current && baseline.current === null) baseline.current = snapshot;
+  }, [loading, snapshot]);
+  useTabDirty(baseline.current !== null && snapshot !== baseline.current);
+
   const reset = useCallback(() => {
     setEntryDate(todayLocal());
     setDescription("");
@@ -331,7 +343,7 @@ export default function FormJurnalManual() {
         method: editId ? "PUT" : "POST",
         body,
       });
-      navigate(LIST_PATH, { state: { toast: `${res.message} (${res.entry_no})` } });
+      navigate(LIST_PATH, { state: { toast: `${res.message} (${res.entry_no})`, closeTab: tabKey } }); // tab form ditutup, daftar dimuat ulang
     } catch (e) {
       setError(e.message || "Gagal menyimpan jurnal.");
     } finally {
@@ -351,7 +363,7 @@ export default function FormJurnalManual() {
     }
   };
 
-  const cancel = () => navigate(LIST_PATH);
+  const cancel = () => closeTab(tabKey); // tutup tab ini (minta konfirmasi bila belum disimpan), kembali ke halaman asal
 
   return (
     <div className="min-h-screen bg-slate-50 py-6 sm:py-8">
