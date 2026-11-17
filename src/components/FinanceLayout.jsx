@@ -664,6 +664,7 @@ export default function FinanceLayout({ routes }) {
     const keepState = st && Object.keys(st).length ? st : null;
     const existing = cur.find((t) => t.key === key);
     let next;
+    let replacedKey = null;
     if (existing) {
       // Klik menu biasa (tanpa parameter) pada tab yang sudah terbuka hanya memindahkan fokus, tidak mengubah isinya.
       const focusOnly = !location.search && existing.pathname === location.pathname;
@@ -674,15 +675,24 @@ export default function FinanceLayout({ routes }) {
       const bump = (!same && !sectionSwitch) || Boolean(keepState?.toast || keepState?.refresh);
       next = cur.map((t) => (t.key === key ? { ...t, pathname: location.pathname, search: focusOnly ? t.search : location.search, state: keepState, rev: bump ? t.rev + 1 : t.rev } : t));
     } else {
-      if (cur.length >= MAX_TABS) {
-        setNotice(`Batas ${MAX_TABS} tab tercapai. Tutup satu tab dulu sebelum membuka halaman lain.`);
-        const back = cur.find((t) => t.key === activeRef.current) || cur[0];
-        navRef.current(back.pathname + back.search, { replace: true });
-        return;
-      }
       const nt = { key, pathname: location.pathname, search: location.search, state: keepState, rev: 0, opener: activeRef.current };
-      const at = isChild(key) ? cur.findIndex((t) => t.key === activeRef.current) : -1;
-      next = at >= 0 ? [...cur.slice(0, at + 1), nt, ...cur.slice(at + 1)] : [...cur, nt];
+      const activeIdx = cur.findIndex((t) => t.key === activeRef.current);
+      // Menu baru menggantikan tab yang sedang aktif (seperti tautan biasa), bukan selalu buka tab baru.
+      // Kecuali: form anak (selalu di sebelah halaman asalnya), tab Dashboard (tidak boleh ditimpa), atau tab aktif belum disimpan.
+      const canReplace = !isChild(key) && activeIdx >= 0 && !isPinned(cur[activeIdx].key) && !dirtyRef.current[activeRef.current];
+      if (canReplace) {
+        replacedKey = cur[activeIdx].key;
+        next = cur.map((t, i) => (i === activeIdx ? nt : t));
+      } else {
+        if (cur.length >= MAX_TABS) {
+          setNotice(`Batas ${MAX_TABS} tab tercapai. Tutup satu tab dulu sebelum membuka halaman lain.`);
+          const back = cur.find((t) => t.key === activeRef.current) || cur[0];
+          navRef.current(back.pathname + back.search, { replace: true });
+          return;
+        }
+        const at = isChild(key) ? activeIdx : -1;
+        next = at >= 0 ? [...cur.slice(0, at + 1), nt, ...cur.slice(at + 1)] : [...cur, nt];
+      }
     }
     if (closeKey && closeKey !== key) next = next.filter((t) => t.key !== closeKey || isPinned(t.key));
     setTabs(next);
@@ -691,9 +701,11 @@ export default function FinanceLayout({ routes }) {
       const n = new Set(m);
       n.add(key);
       if (closeKey && closeKey !== key && !isPinned(closeKey)) n.delete(closeKey);
+      if (replacedKey && replacedKey !== key && !isPinned(replacedKey)) n.delete(replacedKey);
       return n;
     });
     if (closeKey && closeKey !== key) setDirtyMap((d) => { const n = { ...d }; delete n[closeKey]; return n; });
+    if (replacedKey && replacedKey !== key) setDirtyMap((d) => { const n = { ...d }; delete n[replacedKey]; return n; });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.key]);
 
