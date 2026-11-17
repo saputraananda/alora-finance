@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { rekonTabOf } from "../../lib/tabs";
 import BankRekon from "./components/BankRekon";
@@ -8,6 +8,9 @@ import Riwayat from "./components/Riwayat";
 import {
   HiOutlineArrowPath,
   HiOutlineCheckCircle,
+  HiOutlineChevronDown,
+  HiOutlineChevronLeft,
+  HiOutlineChevronRight,
   HiOutlineExclamationTriangle,
   HiOutlineLockClosed,
   HiOutlineScale,
@@ -68,6 +71,94 @@ function Notice({ msg, onClose }) {
 }
 
 // ═════════════════════════════ TAB: HARIAN ══════════════════════════════
+const STATUS_GROUPS = ["Perlu tindakan", "Siap disetujui", "Dikunci", "Tidak ada transaksi", "Sebelum go-live"];
+
+function OutletPicker({ rows, sel, onSelect, chipOf }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const box = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => { if (box.current && !box.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const cur = rows.find((r) => r.outlet_id === sel);
+  const needs = rows.filter((r) => chipOf(r).text === "Perlu tindakan");
+  const jump = (dir) => {
+    if (!needs.length) return;
+    const i = needs.findIndex((r) => r.outlet_id === sel);
+    const next = i < 0 ? (dir > 0 ? needs[0] : needs[needs.length - 1]) : needs[(i + dir + needs.length) % needs.length];
+    onSelect(next.outlet_id);
+  };
+  const term = q.trim().toLowerCase();
+  const groups = STATUS_GROUPS.map((g) => ({ g, items: rows.filter((r) => chipOf(r).text === g && (!term || r.outlet_name.toLowerCase().includes(term))) })).filter((x) => x.items.length);
+  const mark = (r) => (r.status === "APPROVED" ? <HiOutlineLockClosed className="h-3.5 w-3.5 shrink-0 text-emerald-600" /> : <span className={cn("h-2 w-2 shrink-0 rounded-full", chipOf(r).dot)} />);
+  const arrowCls = "flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:border-emerald-400 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40";
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <div ref={box} className="relative">
+        <button type="button" onClick={() => setOpen((v) => !v)} aria-haspopup="listbox" aria-expanded={open} className="flex h-8 min-w-[240px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-800 hover:border-emerald-400">
+          {cur ? (
+            <>
+              {mark(cur)}
+              <span className="truncate">{cur.outlet_name}</span>
+              <span className="ml-1 truncate font-semibold text-slate-400">· {chipOf(cur).text}</span>
+            </>
+          ) : (
+            <span className="font-semibold text-slate-400">Pilih cabang</span>
+          )}
+          <HiOutlineChevronDown className={cn("ml-auto h-4 w-4 shrink-0 text-slate-400 transition", open && "rotate-180")} />
+        </button>
+        {open && (
+          <div className="absolute left-0 top-full z-30 mt-1 w-80 max-w-[90vw] rounded-xl border border-slate-200 bg-white shadow-lg">
+            <div className="border-b border-slate-100 p-2">
+              <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari cabang..." className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10" />
+            </div>
+            <div role="listbox" className="max-h-72 overflow-y-auto py-1">
+              {groups.length === 0 && <p className="px-3 py-4 text-center text-xs text-slate-400">Cabang tidak ditemukan</p>}
+              {groups.map(({ g, items }) => (
+                <div key={g}>
+                  <p className="px-3 pb-0.5 pt-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    {g} ({items.length})
+                  </p>
+                  {items.map((r) => (
+                    <button
+                      key={r.outlet_id}
+                      type="button"
+                      role="option"
+                      aria-selected={r.outlet_id === sel}
+                      onClick={() => { onSelect(r.outlet_id); setOpen(false); setQ(""); }}
+                      className={cn("flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50", r.outlet_id === sel && "bg-emerald-50 text-emerald-800")}
+                    >
+                      {mark(r)}
+                      <span className="truncate">{r.outlet_name}</span>
+                    </button>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+      <button type="button" onClick={() => jump(-1)} disabled={!needs.length} title="Cabang sebelumnya yang perlu tindakan" aria-label="Cabang sebelumnya yang perlu tindakan" className={arrowCls}>
+        <HiOutlineChevronLeft className="h-4 w-4" />
+      </button>
+      <button type="button" onClick={() => jump(1)} disabled={!needs.length} title="Cabang berikutnya yang perlu tindakan" aria-label="Cabang berikutnya yang perlu tindakan" className={arrowCls}>
+        <HiOutlineChevronRight className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
+
 function Harian({ date, setDate, onGoto, initialOutlet }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -182,33 +273,8 @@ function Harian({ date, setDate, onGoto, initialOutlet }) {
           <HiOutlineArrowPath className={cn("h-4 w-4", loading && "animate-spin")} />
           Muat ulang
         </button>
-      </div>
-
-      {/* Pilih cabang */}
-      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-6">
-        {rows.map((r) => {
-          const c = chip(r);
-          return (
-            <button
-              key={r.outlet_id}
-              type="button"
-              onClick={() => setSel(r.outlet_id)}
-              className={cn(
-                "rounded-xl border bg-white p-3 text-left transition",
-                sel === r.outlet_id ? "border-emerald-500 ring-2 ring-emerald-500/15" : "border-slate-200 hover:border-emerald-300"
-              )}
-            >
-              <p className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
-                {r.status === "APPROVED" && <HiOutlineLockClosed className="h-3.5 w-3.5 text-emerald-600" />}
-                {r.outlet_name}
-              </p>
-              <p className="mt-1 flex items-center gap-1.5 text-[10px] font-semibold text-slate-500">
-                <span className={cn("h-1.5 w-1.5 rounded-full", c.dot)} />
-                {c.text}
-              </p>
-            </button>
-          );
-        })}
+        <span className="mx-1 hidden h-5 w-px bg-slate-200 sm:block" />
+        <OutletPicker rows={rows} sel={sel} onSelect={setSel} chipOf={chip} />
       </div>
 
       {loading && !d ? (
