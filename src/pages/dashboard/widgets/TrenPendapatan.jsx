@@ -4,7 +4,7 @@ import { Card, State, ddmm, jt, juta, rangeLabel, rupiah } from "../ui";
 
 const UNITS = [
   { key: "waschen", label: "Waschen", color: "#2563eb" },
-  { key: "cleanox", label: "Cleanox", color: "#f59e0b" },
+  { key: "cleanox", label: "Cleanox by Waschen", color: "#f59e0b" },
 ];
 
 // Titik terakhir berupa lingkaran kosong (hari berjalan belum lengkap), titik lain tanpa penanda
@@ -36,6 +36,24 @@ export default function TrenPendapatan({ unit }) {
               </div>
               <span className="text-slate-400">juta Rp{d.incomplete_today ? " · hari ini belum lengkap" : ""}</span>
             </div>
+            {d.target && unit === "all" && (
+              <div className="mb-3 rounded-xl border border-slate-100 bg-slate-50/70 px-3 py-2.5">
+                <div className="flex items-baseline justify-between gap-2 text-[11px] text-slate-500">
+                  <span>Target pendapatan (Waschen + Cleanox by Waschen)</span>
+                  <span className="text-sm font-extrabold tabular-nums text-slate-800">{String(d.target.percent).replace(".", ",")}%</span>
+                </div>
+                <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-slate-200">
+                  <div
+                    className={`h-full rounded-full ${d.target.percent >= 100 ? "bg-emerald-500" : "bg-blue-500"}`}
+                    style={{ width: `${Math.min(100, Math.max(0, d.target.percent))}%` }}
+                  />
+                </div>
+                <p className="mt-1.5 text-[11px] text-slate-500">
+                  <span className="font-semibold text-slate-700">Rp {rupiah(d.target.actual)}</span> dari target Rp {rupiah(d.target.nominal)}
+                  {d.target.percent < 100 && <> · sisa Rp {rupiah(d.target.nominal - d.target.actual)}</>}
+                </p>
+              </div>
+            )}
             <div className="h-48 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={rows} margin={{ top: 8, right: 8, left: -14, bottom: 0 }}>

@@ -132,11 +132,30 @@ export async function getSales(req, res) {
       }
     }
     const yd = days.find((x) => x.date === addDays(today, -1)) || null;
+
+    // Target (mst_target_waschen di DB POS, hanya dibaca) per periode cutoff; bulan = bulan akhir periode.
+    // Layanan "(Cleanox)" di POS Waschen adalah Cleanox by Waschen (bagi hasil) dan tetap pendapatan POS Waschen,
+    // jadi realisasi dibandingkan ke target adalah total keduanya. Hanya bila rentangnya persis satu periode cutoff.
+    let target = null;
+    if (range.cutoff) {
+      try {
+        const [[t]] = await myWaschenPool.query(
+          `SELECT COALESCE(SUM(nominal), 0) AS nominal FROM mst_target_waschen WHERE tahun = ? AND bulan = ?${outletId ? " AND outlet_id = ?" : ""}`,
+          outletId ? [range.cutoff.year, range.cutoff.month, outletId] : [range.cutoff.year, range.cutoff.month]
+        );
+        const nominal = toFixed2(t?.nominal || 0);
+        const actual = toFixed2(waschen + cleanox);
+        if (nominal > 0) target = { nominal, actual, percent: toFixed2((actual / nominal) * 100) };
+      } catch (e) {
+        console.warn("[dashboard.sales] target tidak terbaca:", e.message);
+      }
+    }
     return res.json({
       data: {
         from,
         to,
         days,
+        target,
         totals: { waschen: toFixed2(waschen), cleanox: toFixed2(cleanox), total: toFixed2(waschen + cleanox) },
         yesterday: yd,
         incomplete_today: to === today,
