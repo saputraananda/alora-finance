@@ -7,6 +7,7 @@ import { toFixed2 } from "../../utils/currencyHelpers.js";
 import { computeDay, loadAccountMap } from "../pos/pos.controller.js";
 import { loadOutletOverrides } from "../../utils/accountResolver.js";
 import { loadStartDates, beforeStart, startMessage } from "../../utils/outletStart.js";
+import { lockDateMessage } from "../../utils/dayLock.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // REKONSILIASI HARIAN — per cabang, per hari, per metode bayar
@@ -334,6 +335,8 @@ export async function approveDay(req, res) {
   const { date, outlet_id } = req.body || {};
   const actorId = req.user?.id || null;
   if (!isDate(date) || !outlet_id) return res.status(422).json({ message: "Tanggal dan cabang wajib diisi." });
+  const dateLockMsg = await lockDateMessage(date);
+  if (dateLockMsg) return res.status(422).json({ message: dateLockMsg });
 
   const conn = await pool.getConnection();
   try {

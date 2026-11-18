@@ -1,6 +1,7 @@
 import { pool, safeQuery, getOutlets } from "../../db/pool.js";
 import { toFixed2 } from "../../utils/currencyHelpers.js";
 import { cutoffRange, currentCutoffMonth } from "../dashboard/dashboard.controller.js";
+import { lockDateMessage } from "../../utils/dayLock.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // ASET TETAP (Referensi hal. 23, Konsep hal. 20)
@@ -235,6 +236,8 @@ export async function runDepreciation(req, res) {
   const conn = await pool.getConnection();
   try {
     const p = periodOf(req.body || {});
+    const lockMsg = await lockDateMessage(p.end);
+    if (lockMsg) return res.status(422).json({ message: lockMsg });
     const [map] = await pool.query(`SELECT role, account_id FROM mst_account_map WHERE role IN ('AKUM_PENYUSUTAN','BEBAN_PENYUSUTAN')`);
     const acc = Object.fromEntries(map.map((m) => [m.role, m.account_id]));
     if (!acc.AKUM_PENYUSUTAN || !acc.BEBAN_PENYUSUTAN) return res.status(422).json({ message: "Peran akun Beban/Akumulasi Penyusutan belum dipetakan di Pengaturan." });

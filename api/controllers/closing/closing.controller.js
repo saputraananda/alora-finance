@@ -2,6 +2,7 @@ import { pool, myWaschenPool, safeQuery, getOutlets } from "../../db/pool.js";
 import { toFixed2 } from "../../utils/currencyHelpers.js";
 import { cutoffRange, currentCutoffMonth } from "../dashboard/dashboard.controller.js";
 import { loadStartDates, beforeStart } from "../../utils/outletStart.js";
+import { lockDateMessage } from "../../utils/dayLock.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // TUTUP BUKU > CHECKLIST PERIODE
@@ -99,6 +100,8 @@ export async function postAllocation(req, res) {
   try {
     const p = periodOf(req.body || {});
     const rounding = ROUNDING[req.body?.rounding] ? req.body.rounding : "JUTA";
+    const lockMsg = await lockDateMessage(p.end);
+    if (lockMsg) return res.status(422).json({ message: lockMsg });
     const a = await computeAllocation(p, rounding);
     if (!a.role) return res.status(422).json({ message: "Peran 'Alokasi Biaya Pusat' belum dipetakan di Pengaturan." });
     if (a.existing && a.existing.status !== "REVERSED") return res.status(422).json({ message: `Alokasi periode ini sudah diposting (${a.existing.entry_no}). Balik jurnalnya dulu untuk mengulang.` });

@@ -1,6 +1,6 @@
 import { pool, safeQuery, myWaschenPool } from "../../db/pool.js";
 import { toFixed2 } from "../../utils/currencyHelpers.js";
-import { lockedOutlets, dayLockMessage } from "../../utils/dayLock.js";
+import { lockedOutlets, dayLockMessage, lockDateMessage } from "../../utils/dayLock.js";
 import { loadOutletOverrides } from "../../utils/accountResolver.js";
 import crypto from "crypto";
 import { loadStartDates, beforeStart, startMessage } from "../../utils/outletStart.js";
@@ -362,11 +362,12 @@ export async function getPosDay(req, res) {
       syncLog = await loadSyncLog(date);
     }
     const lockedIds = new Set(await lockedOutlets(date, rows.map((r) => r.outlet_id)));
+    const dateLocked = Boolean(await lockDateMessage(date)); // batas kunci tanggal (Pengaturan › Kunci Tanggal)
     const ymd = date.replace(/-/g, "");
 
     const data = rows.map((row) => {
       const batch = batches.get(row.outlet_id);
-      const locked = lockedIds.has(row.outlet_id);
+      const locked = dateLocked || lockedIds.has(row.outlet_id);
       const { lines, missing } = buildLines(row, ov.forOutlet(row.outlet_id, accMap));
       return {
         ...row,

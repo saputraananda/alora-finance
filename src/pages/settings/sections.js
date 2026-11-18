@@ -4,6 +4,7 @@ import {
   HiOutlineBuildingStorefront,
   HiOutlineCreditCard,
   HiOutlineHashtag,
+  HiOutlineLockClosed,
   HiOutlineScale,
   HiOutlineShoppingCart,
   HiOutlineTag,
@@ -21,6 +22,7 @@ export const SETTINGS_SECTIONS = [
   { id: "kategori", slug: "kategori-payment", label: "Kategori Payment", desc: "Label pencocokan bank", icon: HiOutlineTag, intro: "Label yang dipilih saat mencocokkan mutasi bank di Rekonsiliasi. Bukan metode bayar." },
   { id: "penomoran", slug: "penomoran", label: "Penomoran", desc: "Format nomor dokumen", icon: HiOutlineHashtag, intro: "Format nomor Jurnal Umum manual dan Rekon Code. Jurnal otomatis (POS, rekonsiliasi) memakai nomor tetap." },
   { id: "saldo", slug: "saldo-awal", label: "Saldo Awal", desc: "Saldo pembuka akun", icon: HiOutlineScale, intro: "Saldo pembuka setiap akun saat mulai memakai alfi." },
+  { id: "kunci", slug: "kunci-tanggal", label: "Kunci Tanggal", desc: "Batas tanggal jurnal", icon: HiOutlineLockClosed, intro: "Tentukan sendiri tanggal batas. Jurnal bertanggal sampai batas itu tidak bisa dibuat atau diubah lagi." },
 ].map((s) => ({ ...s, to: `${SETTINGS_BASE}/${s.slug}` }));
 
 export const settingsPath = (id) => SETTINGS_SECTIONS.find((s) => s.id === id)?.to || SETTINGS_BASE;

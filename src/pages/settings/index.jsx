@@ -5,6 +5,7 @@ import ConfirmModal from "../../components/ui/ConfirmModal";
 import SaldoAwal from "./components/SaldoAwal";
 import KategoriPayment from "./components/KategoriPayment";
 import Penomoran from "./components/Penomoran";
+import KunciTanggal from "./components/KunciTanggal";
 import Klasifikasi from "../purchasing/Klasifikasi";
 import { SETTINGS_SECTIONS } from "./sections";
 import {
@@ -268,6 +269,7 @@ export default function Pengaturan() {
       {tab === "klasifikasi" && <Klasifikasi embedded />}
       {tab === "penomoran" && <Penomoran />}
       {tab === "saldo" && <SaldoAwal />}
+      {tab === "kunci" && <KunciTanggal />}
 
       {tab === "akun" && (data.service_map || []).length > 0 && (
         <div className="space-y-2">

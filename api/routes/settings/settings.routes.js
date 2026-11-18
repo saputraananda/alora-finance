@@ -16,6 +16,7 @@ import {
 
 import { listPaymentCategories, createPaymentCategory, updatePaymentCategory } from '../../controllers/settings/paymentCategory.controller.js';
 import { listNumbering, createNumbering, updateNumbering } from '../../controllers/settings/numbering.controller.js';
+import { getLockDate, saveLockDate } from '../../controllers/settings/lockDate.controller.js';
 
 const router = express.Router();
 
@@ -32,6 +33,9 @@ router.put('/settings/payment-categories/:id', updatePaymentCategory);
 router.get('/settings/numbering', listNumbering);
 router.post('/settings/numbering', createNumbering);
 router.put('/settings/numbering/:id', updateNumbering);
+// Batas kunci tanggal: jurnal s/d tanggal ini ditolak (semua cabang + Pusat)
+router.get('/settings/lock-date', getLockDate);
+router.put('/settings/lock-date', saveLockDate);
 router.post('/settings/bank-accounts', createBank);
 router.put('/settings/bank-accounts/:id', updateBank);
 router.delete('/settings/bank-accounts/:id', deleteBank);
