@@ -5,6 +5,7 @@ import { ROLES as REKON_ROLES } from "../rekon/rekon.controller.js";
 import { BANK_ROLES } from "../rekon/bank.controller.js";
 import { CLOSING_ROLES } from "../closing/closing.controller.js";
 import { ASSET_ROLES } from "../assets/assets.controller.js";
+import { SETORAN_ROLES } from "../pos/setoran.controller.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // PENGATURAN — Cabang & metode bayar, rekening bank, pemetaan akun
@@ -15,7 +16,7 @@ import { ASSET_ROLES } from "../assets/assets.controller.js";
 
 
 const OPENING_ROLES = { SALDO_AWAL_EKUITAS: { label: "Penyeimbang Saldo Awal (ekuitas)", code: "3-1002" } };
-const allRoles = () => ({ ...POS_ROLES, ...REKON_ROLES, ...BANK_ROLES, ...CLOSING_ROLES, ...OPENING_ROLES, ...ASSET_ROLES });
+const allRoles = () => ({ ...POS_ROLES, ...REKON_ROLES, ...BANK_ROLES, ...CLOSING_ROLES, ...OPENING_ROLES, ...ASSET_ROLES, ...SETORAN_ROLES });
 
 // ════════════════════════════ SALDO AWAL ═════════════════════════════════
 // Saldo diisi menurut saldo normal akun (positif = saldo normal). Selisih debit/kredit
