@@ -53,12 +53,16 @@ function Photo({ src, thumb, alt, className }) {
   return <img src={url} alt={alt} loading="lazy" onError={() => setBad(true)} className={cn("object-cover", className)} />;
 }
 
+const NoCat = () => <span className="text-slate-400">Belum dikategorikan</span>;
+
 const emptyFin = { acquisition_date: "", cost: "", salvage: "0", opening_accum: "0", life_months: "60" };
 
-function DetailModal({ id, onClose, onChanged }) {
+function DetailModal({ id, categories, onClose, onChanged }) {
   const [a, setA] = useState(null);
   const [err, setErr] = useState("");
   const [shot, setShot] = useState(0);
+  const [catBusy, setCatBusy] = useState(false);
+  const [catMsg, setCatMsg] = useState(null);
   const [fin, setFin] = useState(emptyFin);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
@@ -90,9 +94,25 @@ function DetailModal({ id, onClose, onChanged }) {
     }
   };
 
+  const changeCategory = async (v) => {
+    setCatBusy(true);
+    setCatMsg(null);
+    try {
+      const r = await api(`/finance-ho/assets/category/${encodeURIComponent(a.code)}`, { method: "PUT", body: JSON.stringify({ category_id: v ? Number(v) : null }) });
+      const c = (categories || []).find((x) => String(x.id) === String(v));
+      setA((x) => ({ ...x, category_id: v ? Number(v) : null, category: c ? c.name : null }));
+      setCatMsg({ type: "ok", text: r.message || "Kategori disimpan." });
+      onChanged();
+    } catch (e) {
+      setCatMsg({ type: "error", text: e.message });
+    } finally {
+      setCatBusy(false);
+    }
+  };
+
   const locked = a?.finance?.locked;
   const setF = (p) => setFin((f) => ({ ...f, ...p }));
-  const info = a ? [["Kategori", a.category], ["Lokasi", a.outlet_name || a.location || "Pusat"], ["Kondisi", a.condition], ["Merek / model", [a.brand, a.model].filter(Boolean).join(" / ") || "-"], ["No. seri", a.serial || "-"], ["Jumlah", `${a.qty} ${a.unit}`], ["Perusahaan", a.company || "-"], ["PIC", a.pic || "-"]] : [];
+  const info = a ? [["Lokasi", a.outlet_name || a.location || "Pusat"], ["Kondisi", a.condition], ["Merek / model", [a.brand, a.model].filter(Boolean).join(" / ") || "-"], ["No. seri", a.serial || "-"], ["Jumlah", `${a.qty} ${a.unit}`], ["Perusahaan", a.company || "-"], ["PIC", a.pic || "-"]] : [];
 
   return (
     <Modal wide title={a ? a.name : "Detail aset"} subtitle={a ? a.code : undefined} onClose={onClose}
@@ -116,6 +136,20 @@ function DetailModal({ id, onClose, onChanged }) {
               {info.map(([k, v]) => (
                 <div key={k}><dt className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{k}</dt><dd className="mt-0.5 font-semibold text-slate-800">{k === "Kondisi" ? <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-bold", COND_CLS[v])}>{v}</span> : v}</dd></div>
               ))}
+              <div className="col-span-2">
+                <dt className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Kategori</dt>
+                <dd className="mt-0.5">
+                  <select disabled={catBusy} className={inputCls} value={a.category_id ?? ""} onChange={(e) => changeCategory(e.target.value)}>
+                    <option value="">— Belum dikategorikan —</option>
+                    {(categories || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                  {catMsg && (
+                    <p className={cn("mt-1.5 flex items-start gap-1.5 text-[11px] font-semibold", catMsg.type === "ok" ? "text-emerald-700" : "text-rose-700")}>
+                      {catMsg.type === "ok" ? <HiOutlineCheckCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <HiOutlineExclamationTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}{catMsg.text}
+                    </p>
+                  )}
+                </dd>
+              </div>
             </dl>
           </div>
 
@@ -266,7 +300,7 @@ export default function AsetTetap() {
     try {
       const p = new URLSearchParams({ page: String(page), limit: view === "gallery" ? "24" : "25" });
       if (outlet) p.set("outlet_id", outlet);
-      if (category) p.set("sub_kategori", category);
+      if (category) p.set("category_id", category);
       if (condition) p.set("kondisi", condition);
       if (q) p.set("search", q);
       setData(await api(`/finance-ho/assets?${p}`));
@@ -284,7 +318,7 @@ export default function AsetTetap() {
 
   return (
     <div className="space-y-4 p-4 sm:p-6">
-      <PageHeader crumb="Aset Tetap" icon={HiOutlineBuildingOffice2} tone="bg-violet-50 text-violet-700" title="Daftar aset" subtitle="Data dari Manajemen Aset SuperApp (hanya dibaca). Klik aset untuk melihat foto, riwayat maintenance, dan data penyusutan." search={<SearchBox value={search} onChange={setSearch} placeholder="Cari kode, nama, merek, atau no. seri" />}>
+      <PageHeader crumb="Aset Tetap" icon={HiOutlineBuildingOffice2} tone="bg-violet-50 text-violet-700" title="Daftar aset" subtitle="Data aset dari Manajemen Aset SuperApp (hanya dibaca); kategori dan data penyusutan diatur di alfi. Klik aset untuk melihat foto, riwayat maintenance, dan data penyusutan." search={<SearchBox value={search} onChange={setSearch} placeholder="Cari kode, nama, merek, atau no. seri" />}>
         <FieldSelect label="Cabang" value={outlet} onChange={reset(setOutlet)}>
           <option value="">Semua</option>
           {(data?.meta.outlets || []).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
@@ -292,7 +326,8 @@ export default function AsetTetap() {
         </FieldSelect>
         <FieldSelect label="Kategori" value={category} onChange={reset(setCategory)}>
           <option value="">Semua</option>
-          {(data?.meta.categories || []).map((c) => <option key={c} value={c}>{c.replace("Aset ", "")}</option>)}
+          {(data?.meta.categories || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          <option value="none">Belum dikategorikan</option>
         </FieldSelect>
         <FieldSelect label="Kondisi" value={condition} onChange={reset(setCondition)}>
           <option value="">Semua</option>
@@ -321,6 +356,7 @@ export default function AsetTetap() {
                 <p className="truncate font-mono text-[10px] font-bold text-slate-400">{a.code}</p>
                 <p className="line-clamp-2 min-h-[2rem] text-xs font-bold text-slate-800">{a.name}</p>
                 <p className="truncate text-[11px] text-slate-500">{a.outlet_name}</p>
+                <p className="truncate text-[10px] font-semibold text-slate-500">{a.category || <NoCat />}</p>
                 <div className="flex items-center justify-between gap-1 pt-0.5">
                   <span className={cn("truncate rounded-full border px-2 py-0.5 text-[10px] font-bold", COND_CLS[a.condition])}>{a.condition}</span>
                   {a.finance && <span className="shrink-0 text-[10px] font-semibold tabular-nums text-slate-500">Rp {rp(a.finance.book_value)}</span>}
@@ -342,7 +378,7 @@ export default function AsetTetap() {
                     <td className="w-14 px-3 py-2"><Photo src={a.photo} thumb alt="" className="h-9 w-12 rounded-lg" /></td>
                     <td className="px-3 py-2.5 font-mono font-bold text-slate-800">{a.code}</td>
                     <td className="px-3 py-2.5"><p className="font-semibold text-slate-800">{a.name}</p>{(a.brand || a.serial) && <p className="text-[10px] text-slate-400">{[a.brand, a.serial].filter(Boolean).join(" · ")}</p>}</td>
-                    <td className="px-3 py-2.5 text-slate-500">{a.category.replace("Aset ", "")}</td>
+                    <td className="px-3 py-2.5 text-slate-500">{a.category || <NoCat />}</td>
                     <td className="px-3 py-2.5 text-slate-600">{a.outlet_name}</td>
                     <td className="px-3 py-2.5"><span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-bold", COND_CLS[a.condition])}>{a.condition}</span></td>
                     <td className="px-3 py-2.5 text-right font-semibold tabular-nums">{a.finance ? rp(a.finance.book_value) : <span className="text-slate-300">-</span>}</td>
@@ -368,7 +404,7 @@ export default function AsetTetap() {
 
       <Depreciation />
 
-      {detailId && <DetailModal id={detailId} onClose={() => setDetailId(null)} onChanged={load} />}
+      {detailId && <DetailModal id={detailId} categories={data?.meta.categories || []} onClose={() => setDetailId(null)} onChanged={load} />}
     </div>
   );
 }
