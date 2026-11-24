@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import AlokasiBiayaPusat from "./components/AlokasiBiayaPusat";
-import { HiOutlineArrowRight, HiOutlineCheckCircle, HiOutlineLockClosed, HiOutlineMinusCircle, HiOutlineClock } from "react-icons/hi2";
+import { HiOutlineArrowRight, HiOutlineCheckCircle, HiOutlineClipboardDocumentCheck, HiOutlineLockClosed, HiOutlineMinusCircle, HiOutlineClock, HiOutlineReceiptPercent } from "react-icons/hi2";
 import { api } from "../../lib/api";
 import { currentCutoffKey, cutoffMonthLabel, cutoffRangeLabel, recentCutoffKeys } from "../../lib/cutoff";
+import PageHeader, { FieldSelect, HeaderActions, HeaderSlotContext, RefreshButton } from "../../components/ui/PageHeader";
 
 const cn = (...c) => c.filter(Boolean).join(" ");
 const rp = (n) => new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 }).format(Number(n) || 0);
-const selectCls =
-  "rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10";
 
 const STATUS = {
   DONE: { label: "Selesai", icon: HiOutlineCheckCircle, ring: "bg-emerald-500 text-white", chip: "bg-emerald-50 text-emerald-700 border-emerald-200" },
@@ -22,10 +21,6 @@ function ChecklistPeriode() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-
-  useEffect(() => {
-    document.title = "Tutup Buku | HO Finance";
-  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -61,23 +56,14 @@ function ChecklistPeriode() {
   const pct = s ? Math.round((s.done / s.total) * 100) : 0;
 
   return (
-    <div className="space-y-5 p-4 sm:p-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <p className="text-[11px] font-semibold text-slate-400">Tutup Buku</p>
-          <div className="mt-0.5 flex items-center gap-2">
-            <div className="rounded-xl bg-fuchsia-50 p-2 text-fuchsia-700"><HiOutlineLockClosed className="h-5 w-5" /></div>
-            <h1 className="text-lg font-extrabold tracking-tight text-slate-800">Checklist periode</h1>
-          </div>
-          <p className="mt-1 text-xs text-slate-500">Periode baru bisa dikunci setelah semua langkah selesai.</p>
-        </div>
-        <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-500">Periode:
-          <select value={month} onChange={(e) => setMonth(e.target.value)} className={selectCls} title={cutoffRangeLabel(month)}>
-            {recentCutoffKeys(18).map((k) => <option key={k} value={k}>{cutoffMonthLabel(k)}</option>)}
-          </select>
-          <span className="hidden text-[11px] font-medium text-slate-400 sm:inline">{cutoffRangeLabel(month)}</span>
-        </label>
-      </div>
+    <div className="space-y-5">
+      <HeaderActions>
+        <FieldSelect label="Periode" value={month} onChange={setMonth} title={cutoffRangeLabel(month)}>
+          {recentCutoffKeys(18).map((k) => <option key={k} value={k}>{cutoffMonthLabel(k)}</option>)}
+        </FieldSelect>
+        <span className="hidden text-[11px] font-medium text-slate-400 sm:inline">{cutoffRangeLabel(month)}</span>
+        <RefreshButton onClick={load} spinning={loading} />
+      </HeaderActions>
 
       {error && <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{error}</p>}
       {loading && !data && <div className="rounded-2xl border border-slate-200 bg-white py-12 text-center text-xs text-slate-400">Memeriksa langkah tutup buku...</div>}
@@ -148,23 +134,39 @@ function ChecklistPeriode() {
 
 // Tutup Buku: Checklist periode · Alokasi biaya pusat
 const TABS = [
-  { id: "checklist", label: "Checklist periode" },
-  { id: "alokasi", label: "Alokasi biaya pusat" },
+  { id: "checklist", label: "Checklist periode", icon: HiOutlineClipboardDocumentCheck, desc: "Periode baru bisa dikunci setelah semua langkah selesai." },
+  { id: "alokasi", label: "Alokasi biaya pusat", icon: HiOutlineReceiptPercent, desc: "Biaya berdimensi Pusat dibagi ke cabang sesuai porsi pendapatan, lalu diposting sebagai jurnal alokasi." },
 ];
 
 export default function TutupBuku() {
   const [params] = useSearchParams();
   const [tab, setTab] = useState(params.get("tab") === "alokasi" ? "alokasi" : "checklist");
+  const [slot, setSlot] = useState(null);
+  const active = TABS.find((t) => t.id === tab);
+
+  useEffect(() => {
+    document.title = "Tutup Buku | HO Finance";
+  }, []);
+
   return (
-    <div>
-      <div className="flex gap-1 border-b border-slate-200 px-4 pt-4 sm:px-6 sm:pt-6">
-        {TABS.map((t) => (
-          <button key={t.id} type="button" onClick={() => setTab(t.id)} className={cn("-mb-px border-b-2 px-4 py-2 text-xs font-bold transition", tab === t.id ? "border-emerald-600 text-emerald-700" : "border-transparent text-slate-400 hover:text-slate-600")}>
-            {t.label}
-          </button>
-        ))}
+    <HeaderSlotContext.Provider value={slot}>
+      {/* Tab paling atas (sama seperti Account Receivable), baru di bawahnya header halaman */}
+      <div className="border-b border-slate-200 bg-white px-0 print:hidden sm:px-2" role="tablist" aria-label="Tutup Buku">
+        <div className="flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {TABS.map(({ id, label, icon: Icon }) => (
+            <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)} className={cn("-mb-px flex shrink-0 items-center gap-2 border-b-2 px-4 py-3 text-xs font-bold transition", tab === id ? "border-emerald-600 text-emerald-700" : "border-transparent text-slate-500 hover:text-slate-800")}>
+              <Icon className="h-4 w-4" /> {label}
+            </button>
+          ))}
+        </div>
       </div>
-      {tab === "checklist" ? <ChecklistPeriode /> : <AlokasiBiayaPusat />}
-    </div>
+
+      <div className="space-y-5 p-4 sm:p-6">
+        <PageHeader crumb="Tutup Buku" icon={HiOutlineLockClosed} tone="bg-fuchsia-50 text-fuchsia-700" title={active.label} subtitle={active.desc}>
+          <div ref={setSlot} className="contents" />
+        </PageHeader>
+        {tab === "checklist" ? <ChecklistPeriode /> : <AlokasiBiayaPusat />}
+      </div>
+    </HeaderSlotContext.Provider>
   );
 }

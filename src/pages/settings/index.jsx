@@ -17,6 +17,7 @@ import {
   HiOutlineXMark,
 } from "react-icons/hi2";
 import { api } from "../../lib/api";
+import PageHeader, { HeaderSlotContext, PrimaryButton, RefreshButton } from "../../components/ui/PageHeader";
 
 const cn = (...c) => c.filter(Boolean).join(" ");
 const inputCls =
@@ -79,6 +80,9 @@ export default function Pengaturan() {
   const [msg, setMsg] = useState(null);
   const [modal, setModal] = useState(null); // {kind, form}
   const [saving, setSaving] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  // Bagian yang punya komponen sendiri (Kategori Payment, Penomoran, ...) mengisi kolom kanan header lewat <HeaderActions>
+  const [slot, setSlot] = useState(null);
 
   useEffect(() => {
     document.title = "Pengaturan | HO Finance";
@@ -126,19 +130,22 @@ export default function Pengaturan() {
   const th = "px-3 py-2.5 text-[10px] font-bold uppercase tracking-wider text-slate-400";
 
   const CurIcon = cur.icon;
+  const refresh = async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  };
 
   return (
+    <HeaderSlotContext.Provider value={slot}>
       <div className="space-y-5 p-4 sm:p-6">
-      <div>
-        <p className="text-[11px] font-semibold text-slate-400">Pengaturan</p>
-        <div className="mt-0.5 flex items-center gap-2">
-          <div className="rounded-xl bg-slate-100 p-2 text-slate-700">
-            <CurIcon className="h-5 w-5" />
-          </div>
-          <h1 className="text-lg font-extrabold tracking-tight text-slate-800">{cur.label}</h1>
-        </div>
-        <p className="mt-1 text-xs text-slate-500">{cur.intro}</p>
-      </div>
+      <PageHeader crumb="Pengaturan" icon={CurIcon} tone="bg-slate-100 text-slate-700" title={cur.label} subtitle={cur.intro}>
+        {tab === "bank" && (
+          <PrimaryButton icon={HiOutlinePlus} onClick={() => setModal({ kind: "bank", form: { outlet_id: "", bank_name: "", account_no: "", holder: "", account_id: null, is_active: 1 } })}>Rekening baru</PrimaryButton>
+        )}
+        {["cabang", "metode", "bank", "akun"].includes(tab) && <RefreshButton onClick={refresh} spinning={refreshing} />}
+        <div ref={setSlot} className="contents" />
+      </PageHeader>
 
       {msg && (
         <div className={cn("flex items-start gap-2 rounded-xl border p-3 text-xs font-medium", msg.type === "ok" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-rose-200 bg-rose-50 text-rose-700")}>
@@ -189,14 +196,13 @@ export default function Pengaturan() {
               <table className="w-full text-left text-xs">
                 <thead className="border-b border-slate-100 bg-slate-50">
                   <tr>
-                    <th className={th}>Metode</th><th className={th}>Akun piutang / kas</th><th className={th}>MDR</th><th className={th}>Cair</th><th className={th}>Rekening tujuan</th><th className={cn(th, "text-right")}>Toleransi</th><th className={th} />
+                    <th className={th}>Metode</th><th className={th}>MDR</th><th className={th}>Cair</th><th className={th}>Rekening tujuan</th><th className={cn(th, "text-right")}>Toleransi</th><th className={th} />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {data.methods.map((m) => (
                     <tr key={m.code} className="hover:bg-slate-50/60">
-                      <td className="px-3 py-3 font-bold text-slate-800">{m.label}</td>
-                      <td className="px-3 py-3 text-slate-600">{m.account || <span className="text-rose-500">belum dipetakan</span>}</td>
+                      <td className="px-3 py-3 font-bold text-slate-800">{m.code === "QRIS" ? "QRIS STATIS" : m.label}</td>
                       <td className="px-3 py-3 text-slate-600">{m.mdr_percent != null ? `${String(m.mdr_percent).replace(".", ",")}%` : m.mdr_fixed != null ? `Rp ${rupiah(m.mdr_fixed)}` : "-"}</td>
                       <td className="px-3 py-3 text-slate-600">{m.settle_days != null ? `T+${m.settle_days}` : m.settle_note || "-"}{m.settle_days != null && m.settle_note ? ` · ${m.settle_note}` : ""}</td>
                       <td className="px-3 py-3 text-slate-600">{m.dest_bank_id ? bankLabel(m.dest_bank_id) : "-"}</td>
@@ -221,11 +227,6 @@ export default function Pengaturan() {
       {/* ───────────── Rekening bank ───────────── */}
       {tab === "bank" && (
         <div className="space-y-3">
-          <div className="flex justify-end">
-            <button type="button" onClick={() => setModal({ kind: "bank", form: { outlet_id: "", bank_name: "", account_no: "", holder: "", account_id: null, is_active: 1 } })} className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700">
-              <HiOutlinePlus className="h-4 w-4" /> Rekening baru
-            </button>
-          </div>
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
@@ -389,7 +390,7 @@ export default function Pengaturan() {
 
       {modal?.kind === "method" && (
         <Modal
-          title={modal.form.label}
+          title={modal.form.code === "QRIS" ? "QRIS STATIS" : modal.form.label}
           subtitle="Kosongkan bila belum ada kontrak / kebijakan."
           onClose={() => setModal(null)}
           footer={
@@ -457,5 +458,6 @@ export default function Pengaturan() {
         </Modal>
       )}
       </div>
+    </HeaderSlotContext.Provider>
   );
 }

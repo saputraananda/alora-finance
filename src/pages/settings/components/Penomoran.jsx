@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { HiOutlineArrowDown, HiOutlineArrowUp, HiOutlineCheckCircle, HiOutlineExclamationTriangle, HiOutlinePencilSquare, HiOutlinePlus, HiOutlineXMark } from "react-icons/hi2";
 import { api } from "../../../lib/api";
+import { HeaderActions, PrimaryButton, RefreshButton } from "../../../components/ui/PageHeader";
 
 // Pengaturan > Penomoran: format nomor dokumen per Tipe Transaksi (mirip Accurate).
 // Satu tipe punya satu default; mengubah format hanya berlaku untuk dokumen berikutnya.
@@ -196,6 +197,7 @@ export default function Penomoran() {
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
   const [modal, setModal] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -205,6 +207,11 @@ export default function Penomoran() {
       setError(e.message);
     }
   }, []);
+  const refresh = async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  };
   useEffect(() => { load(); }, [load]);
 
   const typeLabel = useMemo(() => Object.fromEntries((meta?.types || []).map((t) => [t.key, t.label])), [meta]);
@@ -212,13 +219,14 @@ export default function Penomoran() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="max-w-2xl text-xs text-slate-500">
-          Atur format nomor dokumen. Setiap tipe transaksi punya satu penomoran <b>default</b> yang dipakai otomatis. Mengubah format <b>tidak mengubah nomor yang sudah terbit</b>.
-          Jurnal otomatis (POS, rekonsiliasi harian, biaya admin bank, dll.) tetap memakai nomor tetap berbasis cabang dan tanggal.
-        </p>
-        <button type="button" disabled={!meta} onClick={() => setModal(EMPTY(meta.types[0].key))} className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:bg-slate-300"><HiOutlinePlus className="h-4 w-4" /> Tambah penomoran</button>
-      </div>
+      <HeaderActions>
+        <PrimaryButton icon={HiOutlinePlus} disabled={!meta} onClick={() => setModal(EMPTY(meta.types[0].key))}>Tambah penomoran</PrimaryButton>
+        <RefreshButton onClick={refresh} spinning={refreshing} />
+      </HeaderActions>
+      <p className="max-w-2xl text-xs text-slate-500">
+        Atur format nomor dokumen. Setiap tipe transaksi punya satu penomoran <b>default</b> yang dipakai otomatis. Mengubah format <b>tidak mengubah nomor yang sudah terbit</b>.
+        Jurnal otomatis (POS, rekonsiliasi harian, biaya admin bank, dll.) tetap memakai nomor tetap berbasis cabang dan tanggal.
+      </p>
       {msg && <p className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-700"><HiOutlineCheckCircle className="h-4 w-4" /> {msg}</p>}
       {error && <p className="flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-700"><HiOutlineExclamationTriangle className="h-4 w-4" /> {error}</p>}
 

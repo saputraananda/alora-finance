@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { HiOutlineArrowPath, HiOutlineDocumentChartBar, HiOutlinePrinter, HiOutlineTableCells } from "react-icons/hi2";
+import { HiOutlineDocumentChartBar, HiOutlinePrinter, HiOutlineTableCells } from "react-icons/hi2";
 import { api } from "../../lib/api";
 import { currentCutoffKey, cutoffMonthLabel, cutoffRangeLabel } from "../../lib/cutoff";
 import PeriodFilter, { periodText } from "../../components/ui/PeriodFilter";
+import PageHeader, { FieldSelect, PrimaryButton, RefreshButton } from "../../components/ui/PageHeader";
 import PrintReport, { PRINT_TITLE } from "./PrintReport";
 
 const cn = (...c) => c.filter(Boolean).join(" ");
@@ -23,8 +24,6 @@ const REPORTS = [
   { id: "ap-aging", label: "Aging hutang", sub: "Menunggu modul Pembelian", disabled: true },
 ];
 
-const selectCls =
-  "rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10";
 const th = "px-3 py-2.5 text-[10px] font-bold uppercase tracking-wider text-slate-400";
 
 function downloadCsv(name, rows) {
@@ -453,7 +452,7 @@ export default function LaporanKeuangan() {
   const glLink = (accountId) => {
     const qs = new URLSearchParams({ account_id: String(accountId), from: range?.from || "", to: range?.to || "" });
     if (outlet) qs.set("outlet", outlet);
-    return `/finance-ho/buku-besar?${qs}`;
+    return `/finance-ho/general-ledger?tab=ledger&${qs}`;
   };
 
   const active = REPORTS.find((r) => r.id === type);
@@ -487,25 +486,20 @@ export default function LaporanKeuangan() {
         <PrintReport type={type} data={data} compare={compare} outletName={outletName} from={printFrom} to={printTo} prevFrom={data?.period?.prev_from} prevTo={data?.period?.prev_to} />
       )}
 
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <p className="text-[11px] font-semibold text-slate-400">Laporan</p>
-          <div className="mt-0.5 flex items-center gap-2">
-            <div className="rounded-xl bg-cyan-50 p-2 text-cyan-700"><HiOutlineDocumentChartBar className="h-5 w-5" /></div>
-            <h1 className="text-lg font-extrabold tracking-tight text-slate-800">Laporan keuangan</h1>
-          </div>
-          <p className="mt-1 text-xs text-slate-500">Semua laporan dibaca dari jurnal yang sama. Klik akun di Laba rugi untuk menelusuri ke Buku Besar.</p>
-        </div>
-        <div className="no-print flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-500">Cabang:
-            <select value={outlet} onChange={(e) => setOutlet(e.target.value)} className={selectCls}>
-              <option value="">Semua</option>
-              <option value="PUSAT">Pusat</option>
-              {outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-            </select>
-          </label>
+      <div className="no-print">
+        <PageHeader crumb="Laporan" icon={HiOutlineDocumentChartBar} tone="bg-cyan-50 text-cyan-700" title="Laporan keuangan" subtitle="Semua laporan dibaca dari jurnal yang sama. Klik akun di Laba rugi untuk menelusuri ke Buku Besar.">
+          <FieldSelect label="Cabang" value={outlet} onChange={setOutlet}>
+            <option value="">Semua</option>
+            <option value="PUSAT">Pusat</option>
+            {outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+          </FieldSelect>
           <PeriodFilter value={period} onChange={setPeriod} />
-        </div>
+          <button type="button" disabled={!ready} onClick={() => downloadCsv(`${type}-${month}.csv`, toRows(type, data, compare))} className="flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 text-xs font-bold text-slate-700 hover:border-emerald-400 hover:text-emerald-700 disabled:opacity-40">
+            <HiOutlineTableCells className="h-4 w-4" /> Excel
+          </button>
+          <PrimaryButton icon={HiOutlinePrinter} disabled={!ready || printing} onClick={() => setPrinting(true)}>PDF</PrimaryButton>
+          <RefreshButton onClick={load} spinning={loading} />
+        </PageHeader>
       </div>
 
       <div className="grid gap-5 lg:grid-cols-[220px_1fr]">
@@ -542,15 +536,6 @@ export default function LaporanKeuangan() {
                   <input type="checkbox" checked={compare} onChange={(e) => setCompare(e.target.checked)} /> Bandingkan periode lalu
                 </label>
               )}
-              <button type="button" onClick={load} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:border-emerald-400 hover:text-emerald-700">
-                <HiOutlineArrowPath className={cn("h-4 w-4", loading && "animate-spin")} /> Muat ulang
-              </button>
-              <button type="button" disabled={!ready} onClick={() => downloadCsv(`${type}-${month}.csv`, toRows(type, data, compare))} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:border-emerald-400 hover:text-emerald-700 disabled:opacity-40">
-                <HiOutlineTableCells className="h-4 w-4" /> Excel
-              </button>
-              <button type="button" disabled={!ready || printing} onClick={() => setPrinting(true)} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:border-emerald-400 hover:text-emerald-700 disabled:opacity-40">
-                <HiOutlinePrinter className="h-4 w-4" /> PDF
-              </button>
             </div>
           </div>
 

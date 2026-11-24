@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   HiOutlineAdjustmentsHorizontal,
-  HiOutlineArrowPath,
   HiOutlineBars3,
   HiOutlineBuildingLibrary,
   HiOutlineChartBar,
@@ -16,6 +15,7 @@ import DateFilter, { useDateFilter } from "../../components/DateFilter";
 import { DashboardDataProvider } from "./data";
 import { DEFAULT_LAYOUT, WIDGETS, sanitizeLayout } from "./registry";
 import { cn, rangeLabel } from "./ui";
+import PageHeader, { FieldSelect, PrimaryButton, RefreshButton } from "../../components/ui/PageHeader";
 
 const UNITS = [
   { key: "all", label: "Semua unit" },
@@ -23,9 +23,6 @@ const UNITS = [
   { key: "cleanox", label: "Cleanox" },
 ];
 const SPAN = { 1: "", 2: "md:col-span-2", 3: "md:col-span-2 xl:col-span-3" };
-const selectCls =
-  "rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/30";
-
 // Jendela pilih widget untuk ditambahkan
 function AddWidgetModal({ available, onAdd, onClose }) {
   useEffect(() => {
@@ -126,59 +123,22 @@ export default function DashboardFinance() {
 
   return (
     <div className="min-h-screen bg-slate-50/60 p-4 sm:p-6 lg:p-8">
-      <section className="relative mb-4 overflow-hidden rounded-3xl border border-emerald-300/30 bg-gradient-to-r from-[#059669] to-[#6EE7B7] p-6 shadow-sm">
-        <div className="pointer-events-none absolute -right-20 -top-20 h-64 w-64 rounded-full bg-white/20 blur-3xl" />
-        <div className="relative flex items-center gap-3.5">
-          <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/30 bg-white/20 text-white shadow-inner">
-            <HiOutlineChartBar className="h-6 w-6" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-white drop-shadow-xs sm:text-2xl">Dashboard Keuangan HO</h1>
-            <p className="mt-0.5 text-xs font-medium text-emerald-50 sm:text-sm">
-              {date.ready ? `Periode ${rangeLabel(date.from, date.to)}` : "Pilih rentang tanggal"}
-            </p>
-          </div>
-        </div>
-      </section>
-
-      {/* Baris kontrol: tombol widget & atur di kiri, filter di ujung kanan */}
-      <div className="mb-4 flex flex-nowrap items-center justify-between gap-3 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white p-3 shadow-sm">
-        {/* Kiri: Tambah widget & Atur tata letak */}
-        <div className="flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setAdding(true)}
-            disabled={!layout}
-            className="flex shrink-0 items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
-          >
-            <HiOutlinePlus className="h-4 w-4" /> Widget
-          </button>
-          <button
-            type="button"
-            onClick={() => setEditing((v) => !v)}
-            disabled={!layout}
-            className={cn(
-              "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border px-3 py-2 text-xs font-bold transition disabled:opacity-50",
-              editing
-                ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-            )}
-          >
-            <HiOutlineAdjustmentsHorizontal className="h-4 w-4" /> {editing ? "Selesai" : "Atur"}
-          </button>
-          {editing && (
-            <button
-              type="button"
-              onClick={reset}
-              className="shrink-0 whitespace-nowrap rounded-xl px-3 py-2 text-xs font-semibold text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-            >
-              Kembalikan bawaan
-            </button>
-          )}
-        </div>
-
-        {/* Kanan: Filter Unit, Cabang, Periode, dan Refresh */}
-        <div className="flex shrink-0 items-center gap-2">
+      <div className="mb-4">
+        <PageHeader
+          crumb="Dashboard"
+          icon={HiOutlineChartBar}
+          tone="bg-emerald-50 text-emerald-700"
+          title="Dashboard Keuangan HO"
+          subtitle={date.ready ? `Periode ${rangeLabel(date.from, date.to)}` : "Pilih rentang tanggal"}
+        >
+          <FieldSelect label={<HiOutlineBuildingLibrary className="h-4 w-4 shrink-0 text-slate-400" />} title="Cabang" value={outlet} onChange={setOutlet}>
+            <option value="">Semua cabang</option>
+            {outlets.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.name}
+              </option>
+            ))}
+          </FieldSelect>
           <div className="inline-flex shrink-0 rounded-xl border border-slate-200 bg-white p-0.5">
             {UNITS.map((u) => (
               <button
@@ -196,36 +156,32 @@ export default function DashboardFinance() {
               </button>
             ))}
           </div>
-
-          <div className="flex shrink-0 items-center gap-1.5">
-            <HiOutlineBuildingLibrary className="h-4 w-4 shrink-0 text-slate-400" />
-            <select
-              value={outlet}
-              onChange={(e) => setOutlet(e.target.value)}
-              className={selectCls}
-            >
-              <option value="">Semua cabang</option>
-              {outlets.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <span className="mx-0.5 h-6 w-px shrink-0 bg-slate-200" />
-
           <DateFilter f={date} modes={["cutoff", "range"]} compact />
-
           <button
             type="button"
-            onClick={() => setRefreshKey((k) => k + 1)}
-            title="Muat ulang data"
-            className="shrink-0 rounded-xl border border-slate-200 bg-white p-2 text-slate-600 hover:bg-slate-50"
+            onClick={() => setEditing((v) => !v)}
+            disabled={!layout}
+            className={cn(
+              "flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border px-3.5 text-xs font-bold transition disabled:opacity-50",
+              editing
+                ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+            )}
           >
-            <HiOutlineArrowPath className="h-4 w-4" />
+            <HiOutlineAdjustmentsHorizontal className="h-4 w-4" /> {editing ? "Selesai" : "Atur"}
           </button>
-        </div>
+          {editing && (
+            <button
+              type="button"
+              onClick={reset}
+              className="h-9 shrink-0 whitespace-nowrap rounded-lg px-3 text-xs font-semibold text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+            >
+              Kembalikan bawaan
+            </button>
+          )}
+          <PrimaryButton onClick={() => setAdding(true)} disabled={!layout} icon={HiOutlinePlus}>Widget</PrimaryButton>
+          <RefreshButton onClick={() => setRefreshKey((k) => k + 1)} />
+        </PageHeader>
       </div>
 
       {saveError && (

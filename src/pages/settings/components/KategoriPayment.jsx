@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { HiOutlineCheckCircle, HiOutlineExclamationTriangle, HiOutlinePencilSquare, HiOutlinePlus, HiOutlineXMark } from "react-icons/hi2";
 import { api } from "../../../lib/api";
+import { HeaderActions, PrimaryButton, RefreshButton } from "../../../components/ui/PageHeader";
 
 const cn = (...c) => c.filter(Boolean).join(" ");
 const inputCls = "w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-700 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10";
@@ -69,6 +70,7 @@ export default function KategoriPayment() {
   const [msg, setMsg] = useState("");
   const [modal, setModal] = useState(null);
   const [showOff, setShowOff] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -78,6 +80,11 @@ export default function KategoriPayment() {
       setError(e.message);
     }
   }, []);
+  const refresh = async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  };
   useEffect(() => { load(); }, [load]);
 
   const toggle = async (r) => {
@@ -96,12 +103,13 @@ export default function KategoriPayment() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="max-w-2xl text-xs text-slate-500">
-          Daftar ini muncul di dialog <b>Konfirmasi Matching & Alokasi</b> saat Finance mencocokkan mutasi bank. Tambah, ganti nama, atau nonaktifkan sesuai kebutuhan. Setiap kategori ditandai untuk uang masuk, uang keluar, atau keduanya.
-        </p>
-        <button type="button" onClick={() => setModal(EMPTY)} className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700"><HiOutlinePlus className="h-4 w-4" /> Tambah kategori</button>
-      </div>
+      <HeaderActions>
+        <PrimaryButton icon={HiOutlinePlus} onClick={() => setModal(EMPTY)}>Tambah kategori</PrimaryButton>
+        <RefreshButton onClick={refresh} spinning={refreshing} />
+      </HeaderActions>
+      <p className="max-w-2xl text-xs text-slate-500">
+        Daftar ini muncul di dialog <b>Konfirmasi Matching & Alokasi</b> saat Finance mencocokkan mutasi bank. Tambah, ganti nama, atau nonaktifkan sesuai kebutuhan. Setiap kategori ditandai untuk uang masuk, uang keluar, atau keduanya.
+      </p>
       {msg && <p className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-700"><HiOutlineCheckCircle className="h-4 w-4" /> {msg}</p>}
       {error && <p className="flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-700"><HiOutlineExclamationTriangle className="h-4 w-4" /> {error}</p>}
 

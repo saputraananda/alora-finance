@@ -2,12 +2,12 @@ import { useState, useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
 import {
   HiOutlinePlus,
-  HiOutlineMagnifyingGlass,
   HiOutlineXMark,
   HiOutlineSparkles,
   HiOutlineNumberedList,
 } from "react-icons/hi2";
 import { api } from "../../lib/api";
+import PageHeader, { SearchBox, PrimaryButton } from "../../components/ui/PageHeader";
 import ModalFormAkun from "../../components/ModalFormAkun";
 import { CF_LABEL } from "../../lib/cashFlow";
 
@@ -133,51 +133,34 @@ export default function COA() {
 
   return (
     <div className="min-h-screen bg-slate-50/60 p-4 sm:p-6 lg:p-8 space-y-6">
-      {/* ── Header Banner Seragam ────────────────────────────────────────── */}
-      <section className="relative overflow-hidden rounded-3xl border border-emerald-300/30 bg-gradient-to-r from-[#059669] to-[#6EE7B7] p-6 shadow-sm">
-        <div className="absolute -right-20 -top-20 h-64 w-64 rounded-full bg-white/20 blur-3xl pointer-events-none" />
-        <div className="absolute -left-20 bottom-0 h-56 w-56 rounded-full bg-teal-200/25 blur-3xl pointer-events-none" />
+      <PageHeader
+        crumb="Master Data"
+        icon={HiOutlineNumberedList}
+        title="Daftar Akun (COA)"
+        subtitle="Chart of Account · data contoh"
+        search={<SearchBox value={search} onChange={setSearch} placeholder="Cari kode atau nama akun" />}
+      >
+        {accounts.length === 0 && (
+          <button
+            type="button"
+            onClick={handleSeedDefault}
+            disabled={seeding || loading}
+            className="flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 text-xs font-bold text-slate-700 hover:border-emerald-400 hover:text-emerald-700 disabled:opacity-40"
+          >
+            <HiOutlineSparkles className="h-4 w-4" /> {seeding ? "Memuat..." : "Muat Akun Standar"}
+          </button>
+        )}
+        <PrimaryButton
+          onClick={() => {
+            setEditingAccount(null);
+            setModalOpen(true);
+          }}
+          icon={HiOutlinePlus}
+        >
+          Akun baru
+        </PrimaryButton>
+      </PageHeader>
 
-        <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3.5">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/20 border border-white/30 text-white shadow-inner backdrop-blur-xs">
-              <HiOutlineNumberedList className="h-6 w-6 text-white" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold text-white sm:text-2xl drop-shadow-xs">
-                Daftar Akun (COA)
-              </h1>
-              <p className="text-xs sm:text-sm text-emerald-50 mt-0.5 font-medium drop-shadow-xs">
-                Chart of Account · data contoh
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {accounts.length === 0 && (
-              <button
-                type="button"
-                onClick={handleSeedDefault}
-                disabled={seeding || loading}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-white/90 hover:bg-white px-3.5 py-2 text-xs font-bold text-emerald-900 transition shadow-sm disabled:opacity-50"
-              >
-                <HiOutlineSparkles className="h-4 w-4 text-emerald-600" />
-                {seeding ? "Memuat..." : "Muat Akun Standar"}
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                setEditingAccount(null);
-                setModalOpen(true);
-              }}
-              className="inline-flex items-center gap-2 rounded-xl bg-white hover:bg-emerald-50 px-4 py-2.5 text-xs sm:text-sm font-bold text-emerald-800 transition shadow-md shadow-emerald-950/10 active:scale-95"
-            >
-              <HiOutlinePlus className="h-4 w-4 stroke-[2.5]" />
-              Akun baru
-            </button>
-          </div>
-        </div>
-      </section>
 
       {/* Alert Message */}
       {message && (
@@ -205,18 +188,6 @@ export default function COA() {
         {/* Kolom Kiri: Tabel Semua Akun (8 Kolom Desktop) */}
         <div className="lg:col-span-8 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-xs space-y-4">
           <h2 className="text-base font-bold text-slate-800">Semua akun</h2>
-
-          {/* Search Box */}
-          <div className="relative">
-            <HiOutlineMagnifyingGlass className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Cari kode atau nama akun"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full rounded-xl border border-slate-200 bg-white pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-700 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition"
-            />
-          </div>
 
           {/* Filter Pills (Rounded Pills persis seperti mockup) */}
           <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0">
@@ -442,7 +413,7 @@ export default function COA() {
                 {/* Tombol Lihat di Buku Besar */}
                 <div className="pt-3">
                   <Link
-                    to={`/finance-ho/buku-besar?account_id=${selectedAccount.id}`}
+                    to={`/finance-ho/general-ledger?tab=ledger&account_id=${selectedAccount.id}`}
                     className="flex w-full items-center justify-center rounded-lg border border-[#0d5c46] bg-white py-2.5 px-4 text-xs sm:text-sm font-semibold text-[#0d5c46] hover:bg-[#e6f4ea]/40 transition shadow-xs"
                   >
                     <span>Lihat di buku besar</span>

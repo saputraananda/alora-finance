@@ -5,9 +5,7 @@ import {
   HiOutlineCalculator,
   HiOutlineArrowTrendingDown,
   HiOutlineScale,
-  HiOutlineCalendarDays,
   HiOutlineArrowPath,
-  HiOutlineMagnifyingGlass,
   HiOutlinePencilSquare,
   HiOutlineDocumentDuplicate,
   HiOutlineExclamationTriangle,
@@ -17,6 +15,7 @@ import {
   HiOutlineChartBar,
   HiOutlineBookOpen,
 } from "react-icons/hi2";
+import PageHeader, { SearchBox, FieldSelect, PrimaryButton, RefreshButton } from "../../components/ui/PageHeader";
 import { api } from "../../lib/api";
 import { currentCutoff, cutoffRangeLabel } from "../../lib/cutoff";
 
@@ -197,96 +196,41 @@ export default function AnggaranBeban() {
 
   return (
     <div className="min-h-screen bg-slate-50/60 p-4 sm:p-6 lg:p-8">
-      {/* ── Top Header Banner & Controls ─────────────────────────────────── */}
-      <section className="relative overflow-hidden rounded-3xl border border-emerald-300/30 bg-gradient-to-r from-[#059669] to-[#6EE7B7] p-6 shadow-sm mb-6 print:hidden">
-        <div className="absolute -right-20 -top-20 h-64 w-64 rounded-full bg-white/20 blur-3xl pointer-events-none" />
-        <div className="absolute -left-20 bottom-0 h-56 w-56 rounded-full bg-teal-200/25 blur-3xl pointer-events-none" />
-
-        <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3.5">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/20 border border-white/30 text-white shadow-inner backdrop-blur-xs">
-              <HiOutlineCalculator className="h-6 w-6 text-white" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold text-white sm:text-2xl drop-shadow-xs">
-                Anggaran Beban Operasional
-              </h1>
-              <p className="text-xs sm:text-sm text-emerald-50 mt-0.5 font-medium drop-shadow-xs">
-                Pengendalian dan pemantauan realisasi anggaran pengeluaran per akun beban
-              </p>
-            </div>
-          </div>
-
-          {/* Action Controls & Periode Selector */}
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Bulan */}
-            <div className="flex items-center gap-1.5 rounded-xl border border-white/40 bg-white/95 px-3 py-1.5 shadow-sm backdrop-blur-xs">
-              <HiOutlineCalendarDays className="h-4 w-4 text-emerald-700 shrink-0" />
-              <select
-                value={selectedMonth}
-                onChange={(e) => setSelectedMonth(Number(e.target.value))}
-                className="bg-transparent text-xs sm:text-sm font-bold text-slate-800 outline-none cursor-pointer"
-              >
-                {MONTH_NAMES.map((mName, idx) => (
-                  <option key={idx + 1} value={idx + 1}>
-                    {mName}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Tahun */}
-            <div className="rounded-xl border border-white/40 bg-white/95 px-3 py-1.5 shadow-sm backdrop-blur-xs">
-              <select
-                value={selectedYear}
-                onChange={(e) => setSelectedYear(Number(e.target.value))}
-                className="bg-transparent text-xs sm:text-sm font-bold text-slate-800 outline-none cursor-pointer"
-              >
-                {[currentYear - 2, currentYear - 1, currentYear, currentYear + 1].map(
-                  (yr) => (
-                    <option key={yr} value={yr}>
-                      {yr}
-                    </option>
-                  )
-                )}
-              </select>
-            </div>
-
-            {/* Tombol Refresh */}
-            <button
-              type="button"
-              onClick={fetchBudgets}
-              disabled={loading}
-              title="Refresh data"
-              className="flex items-center justify-center rounded-xl border border-white/40 bg-white/95 p-2 text-slate-700 shadow-sm transition hover:bg-white disabled:opacity-50"
-            >
-              <HiOutlineArrowPath
-                className={cn("h-4 w-4", loading && "animate-spin text-emerald-600")}
-              />
-            </button>
-
-            {/* Salin dari Bulan Lalu */}
-            <button
-              type="button"
-              onClick={() => setCopyModalOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-white px-3.5 py-2 text-xs sm:text-sm font-bold text-emerald-800 shadow-md shadow-emerald-950/10 transition hover:bg-emerald-50"
-            >
-              <HiOutlineDocumentDuplicate className="h-4 w-4 text-emerald-700" />
-              <span>Salin Bulan Lalu</span>
-            </button>
-
-            {/* Tombol Cetak */}
-            <button
-              type="button"
-              onClick={() => window.print()}
-              title="Cetak Ringkasan Anggaran"
-              className="flex items-center justify-center rounded-xl border border-white/40 bg-white/95 p-2 text-slate-700 shadow-sm transition hover:bg-white"
-            >
-              <HiOutlinePrinter className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-      </section>
+      <div className="mb-4 print:hidden">
+        <PageHeader
+          crumb="Anggaran"
+          icon={HiOutlineCalculator}
+          title="Anggaran Beban Operasional"
+          subtitle="Pengendalian dan pemantauan realisasi anggaran pengeluaran per akun beban"
+        >
+          <FieldSelect label="Bulan" value={selectedMonth} onChange={(v) => setSelectedMonth(Number(v))}>
+            {MONTH_NAMES.map((mName, idx) => (
+              <option key={idx + 1} value={idx + 1}>
+                {mName}
+              </option>
+            ))}
+          </FieldSelect>
+          <FieldSelect label="Tahun" value={selectedYear} onChange={(v) => setSelectedYear(Number(v))}>
+            {[currentYear - 2, currentYear - 1, currentYear, currentYear + 1].map((yr) => (
+              <option key={yr} value={yr}>
+                {yr}
+              </option>
+            ))}
+          </FieldSelect>
+          <button
+            type="button"
+            onClick={() => window.print()}
+            title="Cetak Ringkasan Anggaran"
+            className="flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 text-xs font-bold text-slate-700 hover:border-emerald-400 hover:text-emerald-700"
+          >
+            <HiOutlinePrinter className="h-4 w-4" /> Cetak
+          </button>
+          <PrimaryButton onClick={() => setCopyModalOpen(true)} icon={HiOutlineDocumentDuplicate}>
+            Salin Bulan Lalu
+          </PrimaryButton>
+          <RefreshButton onClick={fetchBudgets} spinning={loading} />
+        </PageHeader>
+      </div>
 
       {/* Success Notification */}
       {successMsg && (
@@ -473,19 +417,9 @@ export default function AnggaranBeban() {
         </div>
       </div>
 
-      {/* ── 2. Filter & Search Bar ───────────────────────────────────────── */}
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-2xl border border-slate-200/80 bg-white p-3.5 shadow-sm">
-        {/* Search */}
-        <div className="relative flex-1 max-w-md">
-          <HiOutlineMagnifyingGlass className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Cari kode atau nama akun beban..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full rounded-xl border border-slate-200 bg-slate-50/50 pl-9 pr-3 py-1.5 text-xs text-slate-700 outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-1 focus:ring-emerald-500"
-          />
-        </div>
+      {/* ── 2. Cari (baris sendiri) & chip filter status ─────────────────── */}
+      <div className="mb-4 space-y-3 print:hidden">
+        <SearchBox value={search} onChange={setSearch} placeholder="Cari kode atau nama akun beban..." />
 
         {/* Filter Status Pills */}
         <div className="flex flex-wrap items-center gap-1.5 text-xs">
