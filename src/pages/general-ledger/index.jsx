@@ -5,7 +5,6 @@ import {
   HiOutlineCalendarDays,
   HiOutlinePrinter,
   HiOutlineArrowPath,
-  HiOutlineEye,
   HiOutlineExclamationTriangle,
   HiOutlineBuildingLibrary,
   HiOutlineArrowTrendingUp,
@@ -15,6 +14,7 @@ import {
 import { api } from "../../lib/api";
 import { currentCutoffKey, cutoffRangeForKey } from "../../lib/cutoff";
 import DetailJurnalModal from "../../components/DetailJurnalModal";
+import PageHeader, { FieldDateRange, FieldSelect, PrimaryButton, RefreshButton } from "../../components/ui/PageHeader";
 
 function cn(...classes) {
   return classes.filter(Boolean).join(" ");
@@ -141,6 +141,7 @@ export default function BukuBesar() {
 
   // Akun yang sedang aktif terpilih
   const currentAccount = useMemo(() => {
+    if (selectedAccountId === "ALL") return null;
     return accounts.find((a) => String(a.id) === String(selectedAccountId)) || ledgerData?.account;
   }, [accounts, selectedAccountId, ledgerData]);
 
@@ -160,153 +161,37 @@ export default function BukuBesar() {
         }}
       />
 
-      <main className="min-h-screen bg-slate-50 py-6 sm:py-8 print:bg-white print:py-0">
-        <div className="mx-auto max-w-screen-2xl px-4 sm:px-6 lg:px-8 space-y-6 print:px-0">
-          {/* Header Banner */}
-          <section className="relative overflow-hidden rounded-3xl border border-emerald-300/30 bg-gradient-to-r from-[#059669] to-[#6EE7B7] p-6 shadow-sm print:hidden">
-            <div className="absolute -right-20 -top-20 h-64 w-64 rounded-full bg-white/20 blur-3xl pointer-events-none" />
-            <div className="absolute -left-20 bottom-0 h-56 w-56 rounded-full bg-teal-200/25 blur-3xl pointer-events-none" />
+      <main className="min-h-screen bg-slate-50 py-4 sm:py-6 print:bg-white print:py-0">
+        <div className="px-4 sm:px-6 space-y-5 print:px-0">
+          <PageHeader crumb="General Ledger" icon={HiOutlineDocumentText} tone="bg-teal-50 text-teal-700" title="Buku Besar" subtitle="Histori mutasi debit, kredit, dan saldo kumulatif per akun finansial">
+            <FieldSelect label="Cabang" value={outletFilter} onChange={setOutletFilter}>
+              <option value="">Semua</option>
+              <option value="PUSAT">Pusat</option>
+              {outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+            </FieldSelect>
+            <FieldSelect label="Akun" value={selectedAccountId} onChange={setSelectedAccountId} selectClassName="max-w-[280px]">
+              <option value="">-- Pilih akun --</option>
+              <option value="ALL">Semua akun</option>
+              {accounts.map((acc) => (
+                <option key={acc.id} value={acc.id}>{acc.code} - {acc.name} ({acc.type})</option>
+              ))}
+            </FieldSelect>
+            <FieldDateRange from={fromDate} to={toDate} onChange={(f, t) => { setFromDate(f); setToDate(t); }} />
+            <PrimaryButton onClick={handlePrint} disabled={!ledgerData || loading} icon={HiOutlinePrinter}>Cetak</PrimaryButton>
+            <RefreshButton onClick={fetchLedger} spinning={loading} />
+          </PageHeader>
 
-            <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-3.5">
-                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/20 border border-white/30 text-white shadow-inner backdrop-blur-xs">
-                  <HiOutlineDocumentText className="h-6 w-6 text-white" />
-                </div>
-                <div>
-                  <h1 className="text-xl font-bold text-white sm:text-2xl drop-shadow-xs">
-                    General Ledger
-                  </h1>
-                  <p className="text-xs sm:text-sm text-emerald-50 mt-0.5 font-medium drop-shadow-xs">
-                    Histori mutasi debit, kredit, dan saldo kumulatif per akun finansial
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handlePrint}
-                  disabled={!ledgerData || loading}
-                  className="inline-flex items-center gap-2 rounded-xl bg-white hover:bg-emerald-50 text-emerald-800 px-4 py-2.5 text-xs font-bold transition shadow-md shadow-emerald-950/10 disabled:opacity-50 shrink-0"
-                >
-                  <HiOutlinePrinter className="h-4 w-4" />
-                  Cetak / Print
-                </button>
-              </div>
+          {(currentAccount || ledgerData?.all) && (
+            <div className="flex flex-wrap items-center gap-2 print:hidden">
+              {currentAccount && (
+                <>
+                  <span className={cn("inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-bold", TYPE_CONFIG[currentAccount.type]?.color || "bg-slate-100 text-slate-700")}>{currentAccount.type}</span>
+                  <span className="text-xs font-semibold text-slate-500">Saldo normal: <strong>{currentAccount.normal_balance}</strong></span>
+                </>
+              )}
+              <button type="button" onClick={() => { setFromDate(firstDay); setToDate(lastDay); }} className="ml-auto rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-500 hover:bg-slate-50">Periode cutoff berjalan</button>
             </div>
-          </section>
-
-          {/* Filter Card */}
-          <section className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm space-y-4 print:hidden">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-              {/* Dropdown Akun */}
-              <div className="lg:col-span-2">
-                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
-                  Pilih Akun Finansial <span className="text-rose-500">*</span>
-                </label>
-                <select
-                  value={selectedAccountId}
-                  onChange={(e) => setSelectedAccountId(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
-                >
-                  <option value="">-- Pilih Akun Finansial --</option>
-                  {accounts.map((acc) => (
-                    <option key={acc.id} value={acc.id}>
-                      {acc.code} - {acc.name} ({acc.type} • Normal {acc.normal_balance})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Cabang */}
-              <div>
-                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
-                  Cabang
-                </label>
-                <select
-                  value={outletFilter}
-                  onChange={(e) => setOutletFilter(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
-                >
-                  <option value="">Semua</option>
-                  <option value="PUSAT">Pusat</option>
-                  {outlets.map((o) => (
-                    <option key={o.id} value={o.id}>
-                      {o.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Tanggal Dari */}
-              <div>
-                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
-                  Dari Tanggal
-                </label>
-                <input
-                  type="date"
-                  value={fromDate}
-                  onChange={(e) => setFromDate(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
-                />
-              </div>
-
-              {/* Tanggal Sampai */}
-              <div>
-                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
-                  Sampai Tanggal
-                </label>
-                <input
-                  type="date"
-                  value={toDate}
-                  onChange={(e) => setToDate(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between pt-2 border-t border-slate-100">
-              <div className="flex items-center gap-2">
-                {currentAccount && (
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={cn(
-                        "inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold border",
-                        TYPE_CONFIG[currentAccount.type]?.color || "bg-slate-100 text-slate-700"
-                      )}
-                    >
-                      {currentAccount.type}
-                    </span>
-                    <span className="text-xs font-semibold text-slate-500">
-                      Saldo Normal: <strong>{currentAccount.normal_balance}</strong>
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setFromDate(firstDay);
-                    setToDate(lastDay);
-                  }}
-                  className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-500 hover:bg-slate-50 transition"
-                >
-                  Bulan Berjalan
-                </button>
-                <button
-                  type="button"
-                  onClick={fetchLedger}
-                  disabled={loading || !selectedAccountId}
-                  className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 transition shadow-sm disabled:opacity-50"
-                >
-                  {loading && <HiOutlineArrowPath className="h-3.5 w-3.5 animate-spin" />}
-                  Terapkan
-                </button>
-              </div>
-            </div>
-          </section>
+          )}
 
           {/* Error Message */}
           {error && (
@@ -320,16 +205,21 @@ export default function BukuBesar() {
           {ledgerData && (
             <div className="hidden print:block mb-4 border-b pb-3">
               <h2 className="text-lg font-bold text-slate-900">
-                BUKU BESAR: {ledgerData.account.code} - {ledgerData.account.name}
+                BUKU BESAR: {ledgerData.all ? "Semua akun" : `${ledgerData.account.code} - ${ledgerData.account.name}`}
               </h2>
               <p className="text-xs text-slate-600">
-                Periode: {formatDate(ledgerData.period.from)} s/d {formatDate(ledgerData.period.to)} | Kategori: {ledgerData.account.type} | Saldo Normal: {ledgerData.account.normal_balance}
+                Periode: {formatDate(ledgerData.period.from)} s/d {formatDate(ledgerData.period.to)}{!ledgerData.all && ` | Kategori: ${ledgerData.account.type} | Saldo Normal: ${ledgerData.account.normal_balance}`}
               </p>
             </div>
           )}
 
           {/* KPI Summary Cards */}
-          {ledgerData && !loading && (
+          {ledgerData?.truncated && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-800 print:hidden">
+              Hanya 2.000 baris pertama yang ditampilkan. Persempit tanggal atau pilih cabang agar semua mutasi terlihat.
+            </div>
+          )}
+          {ledgerData && !loading && !ledgerData.all && (
             <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {/* Saldo Awal */}
               <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-1">
@@ -406,18 +296,18 @@ export default function BukuBesar() {
                     <th className="py-3 px-4 w-12 text-center">#</th>
                     <th className="py-3 px-4 w-28">Tanggal</th>
                     <th className="py-3 px-4 w-36">No. Jurnal</th>
+                    {ledgerData?.all && <th className="py-3 px-4 min-w-[180px]">Akun</th>}
                     <th className="py-3 px-4 min-w-[240px]">Keterangan Transaksi</th>
                     <th className="py-3 px-4 min-w-[140px]">Memo</th>
                     <th className="py-3 px-4 w-36 text-right">Debit (Rp)</th>
                     <th className="py-3 px-4 w-36 text-right">Kredit (Rp)</th>
                     <th className="py-3 px-4 w-40 text-right">Saldo Berjalan</th>
-                    <th className="py-3 px-3 w-16 text-center print:hidden">Aksi</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700">
                   {loading ? (
                     <tr>
-                      <td colSpan="9" className="py-12 text-center text-slate-400">
+                      <td colSpan={ledgerData?.all ? 9 : 8} className="py-12 text-center text-slate-400">
                         <div className="flex flex-col items-center justify-center gap-2">
                           <HiOutlineArrowPath className="h-6 w-6 animate-spin text-emerald-600" />
                           <span>Menghitung buku besar dan saldo kumulatif...</span>
@@ -426,7 +316,7 @@ export default function BukuBesar() {
                     </tr>
                   ) : !ledgerData ? (
                     <tr>
-                      <td colSpan="9" className="py-12 text-center text-slate-400">
+                      <td colSpan={ledgerData?.all ? 9 : 8} className="py-12 text-center text-slate-400">
                         Pilih akun finansial untuk menampilkan buku besar.
                       </td>
                     </tr>
@@ -439,6 +329,7 @@ export default function BukuBesar() {
                           {formatDate(ledgerData.period.from)}
                         </td>
                         <td className="py-2.5 px-4 text-slate-400 font-mono">-</td>
+                        {ledgerData.all && <td />}
                         <td className="py-2.5 px-4 text-slate-800">
                           Saldo Awal Periode
                         </td>
@@ -446,21 +337,20 @@ export default function BukuBesar() {
                         <td className="py-2.5 px-4 text-right font-mono text-slate-400">-</td>
                         <td className="py-2.5 px-4 text-right font-mono text-slate-400">-</td>
                         <td className="py-2.5 px-4 text-right font-mono font-bold text-slate-800">
-                          {formatRupiah(ledgerData.summary.beginning_balance)}
+                          {ledgerData.all ? "-" : formatRupiah(ledgerData.summary.beginning_balance)}
                         </td>
-                        <td className="py-2.5 px-3 text-center print:hidden"></td>
                       </tr>
 
                       {/* Baris Mutasi Berjalan */}
                       {ledgerData.mutations.length === 0 ? (
                         <tr>
-                          <td colSpan="9" className="py-8 text-center text-slate-400">
+                          <td colSpan={ledgerData?.all ? 9 : 8} className="py-8 text-center text-slate-400">
                             Tidak ada transaksi mutasi pada rentang tanggal ini.
                           </td>
                         </tr>
                       ) : (
                         ledgerData.mutations.map((m, idx) => (
-                          <tr key={m.line_id || idx} className="hover:bg-slate-50/60 transition">
+                          <tr key={m.line_id || idx} onClick={() => setDetailModalId(m.entry_id)} title="Klik untuk melihat detail jurnal" className="cursor-pointer hover:bg-emerald-50/50 transition">
                             <td className="py-2.5 px-4 text-center text-slate-400 font-bold">
                               {idx + 1}
                             </td>
@@ -468,15 +358,9 @@ export default function BukuBesar() {
                               {formatDate(m.entry_date)}
                             </td>
                             <td className="py-2.5 px-4 font-mono font-bold text-slate-800">
-                              <button
-                                type="button"
-                                onClick={() => setDetailModalId(m.entry_id)}
-                                className="text-emerald-700 hover:text-emerald-800 hover:underline transition"
-                                title="Lihat detail jurnal"
-                              >
-                                {m.entry_no}
-                              </button>
+                              <span className="text-emerald-700">{m.entry_no}</span>
                             </td>
+                            {ledgerData.all && <td className="py-2.5 px-4 text-slate-700"><span className="font-mono font-bold">{m.account_code}</span> {m.account_name}</td>}
                             <td className="py-2.5 px-4 text-slate-800 font-medium">
                               {m.journal_description}
                             </td>
@@ -490,17 +374,7 @@ export default function BukuBesar() {
                               {m.credit > 0 ? formatRupiah(m.credit) : "-"}
                             </td>
                             <td className="py-2.5 px-4 text-right font-mono font-bold text-slate-900">
-                              {formatRupiah(m.running_balance)}
-                            </td>
-                            <td className="py-2.5 px-3 text-center print:hidden">
-                              <button
-                                type="button"
-                                onClick={() => setDetailModalId(m.entry_id)}
-                                className="p-1 rounded-md text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 transition"
-                                title="Lihat Detail Jurnal"
-                              >
-                                <HiOutlineEye className="h-4 w-4" />
-                              </button>
+                              {m.running_balance == null ? "-" : formatRupiah(m.running_balance)}
                             </td>
                           </tr>
                         ))
@@ -512,8 +386,8 @@ export default function BukuBesar() {
                 {ledgerData && (
                   <tfoot className="bg-slate-50 border-t-2 border-slate-200 font-bold text-slate-800 text-xs">
                     <tr>
-                      <td colSpan="5" className="py-3 px-4 text-right">
-                        Total Mutasi Periode & Saldo Akhir:
+                      <td colSpan={ledgerData.all ? 6 : 5} className="py-3 px-4 text-right">
+                        {ledgerData.all ? "Total Mutasi Periode:" : "Total Mutasi Periode & Saldo Akhir:"}
                       </td>
                       <td className="py-3 px-4 text-right font-mono text-emerald-700">
                         {formatRupiah(ledgerData.summary.period_debit)}
@@ -522,9 +396,8 @@ export default function BukuBesar() {
                         {formatRupiah(ledgerData.summary.period_credit)}
                       </td>
                       <td className="py-3 px-4 text-right font-mono text-emerald-800 text-sm">
-                        {formatRupiah(ledgerData.summary.ending_balance)}
+                        {ledgerData.all ? "-" : formatRupiah(ledgerData.summary.ending_balance)}
                       </td>
-                      <td className="print:hidden"></td>
                     </tr>
                   </tfoot>
                 )}

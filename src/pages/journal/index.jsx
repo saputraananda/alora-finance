@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from "react";
 import {
   HiOutlineBookOpen,
   HiOutlinePlus,
-  HiOutlineMagnifyingGlass,
   HiOutlineCheckCircle,
   HiOutlineArrowPath,
   HiOutlineChevronLeft,
@@ -16,8 +15,9 @@ import {
   cutoffRangeLabel,
   recentCutoffKeys,
 } from "../../lib/cutoff";
-import PeriodFilter, { periodRange, periodText } from "../../components/ui/PeriodFilter";
+import { periodText } from "../../components/ui/PeriodFilter";
 import { useLocation, useNavigate } from "react-router-dom";
+import PageHeader, { FieldDateRange, FieldSelect, PrimaryButton, RefreshButton, SearchBox } from "../../components/ui/PageHeader";
 import DetailJurnalModal, { JOURNAL_STATUS } from "../../components/DetailJurnalModal";
 
 function cn(...classes) {
@@ -37,6 +37,7 @@ const SOURCE_BADGE = {
   REKON_BANK: { label: "Bank", cls: "bg-cyan-50 text-cyan-700 border-cyan-200" },
   PENGAJUAN: { label: "Pengajuan", cls: "bg-orange-50 text-orange-700 border-orange-200" },
   ALOKASI: { label: "Alokasi", cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" },
+  SETORAN_KASIR: { label: "Setoran Kasir", cls: "bg-sky-50 text-sky-700 border-sky-200" },
 };
 
 const STATUS_BADGE = JOURNAL_STATUS;
@@ -62,9 +63,8 @@ export default function JurnalUmum() {
   const [pagination, setPagination] = useState({ page: 1, limit: 25, total: 0, totalPages: 1 });
 
   // Filter (sesuai mockup: Cabang · Periode · Sumber · Status · Cari)
-  // Periode: bulan cutoff atau tanggal kustom (StrukturCode §12)
-  const [period, setPeriod] = useState({ custom: false, month: currentMonthKey(), from: "", to: "" });
-  const month = period.month;
+  // Periode: rentang tanggal, bawaan = periode cutoff berjalan (26 bulan lalu – 25 bulan ini)
+  const [period, setPeriod] = useState(() => ({ custom: true, ...monthRange(currentMonthKey()) }));
   const [outletFilter, setOutletFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState("");
   const [kindFilter, setKindFilter] = useState(""); // "" | PENDAPATAN | PENGELUARAN
@@ -100,7 +100,7 @@ export default function JurnalUmum() {
 
   const buildQuery = useCallback(
     (page, limit) => {
-      const { from, to } = periodRange(period);
+      const { from, to } = period;
       const qs = new URLSearchParams({ page: String(page), limit: String(limit), from, to });
       if (debouncedSearch.trim()) qs.set("q", debouncedSearch.trim());
       if (statusFilter) qs.set("status", statusFilter);
@@ -166,7 +166,7 @@ export default function JurnalUmum() {
       const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
       const a = document.createElement("a");
       a.href = url;
-      a.download = `daftar-jurnal-${month}.csv`;
+      a.download = `daftar-jurnal-${period.from}_${period.to}.csv`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
@@ -203,40 +203,42 @@ export default function JurnalUmum() {
         }}
       />
 
-      <main className="min-h-screen bg-slate-50 py-6 sm:py-8">
-        <div className="mx-auto max-w-screen-2xl space-y-4 px-4 sm:px-6 lg:px-8">
-          {/* Judul + filter global (Cabang · Periode) */}
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <p className="text-[11px] font-semibold text-slate-400">Jurnal</p>
-              <div className="mt-0.5 flex items-center gap-2">
-                <div className="rounded-xl bg-teal-50 p-2 text-teal-700">
-                  <HiOutlineBookOpen className="h-5 w-5" />
-                </div>
-                <h1 className="text-lg font-extrabold tracking-tight text-slate-800">Daftar jurnal</h1>
-              </div>
-              <p className="mt-1 text-xs text-slate-500">Semua jurnal, otomatis maupun manual, di satu daftar.</p>
-            </div>
+      <main className="min-h-screen bg-slate-50 py-4 sm:py-6">
+        <div className="space-y-4 px-4 sm:px-6">
+          <PageHeader crumb="General Ledger" icon={HiOutlineBookOpen} tone="bg-teal-50 text-teal-700" title="Jurnal" subtitle="Semua jurnal, otomatis maupun manual, di satu daftar.">
+            <FieldSelect label="Cabang" value={outletFilter} onChange={setOutletFilter}>
+              <option value="">Semua</option>
+              <option value="PUSAT">Pusat</option>
+              {outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+            </FieldSelect>
+            <FieldDateRange from={period.from} to={period.to} onChange={(f, t) => setPeriod({ custom: true, from: f, to: t })} />
+            <FieldSelect label="Sumber" value={sourceFilter} onChange={setSourceFilter}>
+              <option value="">Semua</option>
+              <option value="POS">POS</option>
+              <option value="REKONSILIASI">Rekonsiliasi</option>
+              <option value="REKON_BANK">Bank (biaya admin)</option>
+              <option value="PENGAJUAN">Pengajuan</option>
+              <option value="ALOKASI">Alokasi biaya pusat</option>
+              <option value="SETORAN_KASIR">Setoran kasir</option>
+              <option value="MANUAL">Manual</option>
+            </FieldSelect>
+            <FieldSelect label="Status" value={statusFilter} onChange={setStatusFilter}>
+              <option value="">Semua</option>
+              <option value="DRAFT">Draft</option>
+              <option value="PENDING">Menunggu approval</option>
+              <option value="POSTED">Diposting</option>
+              <option value="REVERSED">Dibalik</option>
+            </FieldSelect>
+            <PrimaryButton onClick={() => navigate("/finance-ho/jurnal-umum/baru")} icon={HiOutlinePlus}>Jurnal manual</PrimaryButton>
+            <RefreshButton onClick={() => fetchJournals(pagination.page)} spinning={loading} />
+          </PageHeader>
 
-            <div className="flex flex-wrap items-center gap-2">
-              <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-500">
-                Cabang:
-                <select value={outletFilter} onChange={(e) => setOutletFilter(e.target.value)} className={selectCls}>
-                  <option value="">Semua</option>
-                  <option value="PUSAT">Pusat</option>
-                  {outlets.map((o) => (
-                    <option key={o.id} value={o.id}>{o.name}</option>
-                  ))}
-                </select>
-              </label>
-              <PeriodFilter value={period} onChange={setPeriod} />
-            </div>
-          </div>
 
           {/* Kartu daftar */}
           <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
             {/* Bar filter */}
-            <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 p-3 sm:p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 p-3 sm:p-4">
+              <SearchBox value={search} onChange={setSearch} placeholder="Cari no. jurnal atau keterangan" />
               <div className="inline-flex rounded-xl border border-slate-200 bg-white p-0.5">
                 {[
                   { key: "", label: "Semua", hint: "Semua jenis transaksi" },
@@ -254,46 +256,6 @@ export default function JurnalUmum() {
                   </button>
                 ))}
               </div>
-              <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-500">
-                Sumber:
-                <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)} className={selectCls}>
-                  <option value="">Semua</option>
-                  <option value="POS">POS</option>
-                  <option value="REKONSILIASI">Rekonsiliasi</option>
-                  <option value="REKON_BANK">Bank (biaya admin)</option>
-                  <option value="PENGAJUAN">Pengajuan</option>
-                  <option value="ALOKASI">Alokasi biaya pusat</option>
-                  <option value="MANUAL">Manual</option>
-                </select>
-              </label>
-              <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-500">
-                Status:
-                <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className={selectCls}>
-                  <option value="">Semua</option>
-                  <option value="DRAFT">Draft</option>
-                  <option value="PENDING">Menunggu approval</option>
-                  <option value="POSTED">Diposting</option>
-                  <option value="REVERSED">Dibalik</option>
-                </select>
-              </label>
-              <div className="relative min-w-[200px] flex-1">
-                <HiOutlineMagnifyingGlass className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="text"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Cari no. jurnal atau keterangan"
-                  className="w-full rounded-lg border border-slate-200 bg-white py-1.5 pl-9 pr-3 text-xs text-slate-700 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10"
-                />
-              </div>
-              <button
-                type="button"
-                onClick={() => navigate("/finance-ho/jurnal-umum/baru")}
-                className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm shadow-emerald-600/20 transition hover:bg-emerald-700"
-              >
-                <HiOutlinePlus className="h-4 w-4 stroke-[2.5]" />
-                Jurnal manual
-              </button>
             </div>
 
             {/* Tabel */}
@@ -327,7 +289,7 @@ export default function JurnalUmum() {
                           <HiOutlineBookOpen className="h-8 w-8 text-slate-300" />
                           <span className="font-semibold text-slate-600">Tidak ada jurnal pada {periodText(period)}</span>
                           <span className="text-[11px] text-slate-400">
-                            Ubah filter, posting dari Integrasi POS, atau buat jurnal manual.
+                            Ubah filter, cek data di Front Office Cashier, atau buat jurnal manual.
                           </span>
                         </div>
                       </td>
