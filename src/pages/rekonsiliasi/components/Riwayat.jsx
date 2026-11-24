@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../../../lib/api";
-import { FieldDateRange, FieldSelect, HeaderActions, SearchBox } from "../../../components/ui/PageHeader";
+import PeriodPicker from "../../../components/ui/PeriodPicker";
+import { defaultPeriod, periodChanged, periodLabel, periodRange } from "../../../lib/period";
+import { FieldSelect, HeaderActions, MoreFilters, SearchBox } from "../../../components/ui/PageHeader";
 
 const cn = (...c) => c.filter(Boolean).join(" ");
 const LABEL = { IMPORT: "Import file", MATCH: "Matching", UNMATCH: "Unmatching", STATUS: "Perubahan status", APPROVE: "Approval", EDIT: "Perubahan transaksi" };
@@ -14,8 +16,9 @@ const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); retur
 export default function Riwayat() {
   const [action, setAction] = useState("");
   const [outlet, setOutlet] = useState("");
-  const [from, setFrom] = useState(daysAgo(30));
-  const [to, setTo] = useState(iso(new Date()));
+  const basePeriod = useMemo(() => defaultPeriod({ mode: "date", from: daysAgo(30), to: iso(new Date()) }), []);
+  const [period, setPeriod] = useState(basePeriod);
+  const { from, to } = periodRange(period);
   const [q, setQ] = useState("");
   const [qs, setQs] = useState("");
   const [outlets, setOutlets] = useState([]);
@@ -45,15 +48,21 @@ export default function Riwayat() {
     <div className="space-y-4">
       <HeaderActions>
         <SearchBox value={q} onChange={setQ} placeholder="Cari referensi, nama file, atau keterangan" className="w-56" />
-        <FieldSelect label="Cabang" value={outlet} onChange={setOutlet} title="Berlaku untuk baris pencocokan">
-          <option value="">Semua</option>
-          {outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-        </FieldSelect>
-        <FieldSelect label="Aktivitas" value={action} onChange={setAction}>
-          <option value="">Semua</option>
-          {Object.entries(LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-        </FieldSelect>
-        <FieldDateRange from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} />
+        <MoreFilters
+          count={(outlet ? 1 : 0) + (action ? 1 : 0) + (periodChanged(period, basePeriod) ? 1 : 0)}
+          summary={periodLabel(period)}
+          onReset={() => { setOutlet(""); setAction(""); setPeriod(basePeriod); }}
+        >
+          <FieldSelect label="Cabang" value={outlet} onChange={setOutlet} title="Berlaku untuk baris pencocokan">
+            <option value="">Semua</option>
+            {outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+          </FieldSelect>
+          <FieldSelect label="Aktivitas" value={action} onChange={setAction}>
+            <option value="">Semua</option>
+            {Object.entries(LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </FieldSelect>
+          <PeriodPicker value={period} onChange={setPeriod} maxDate={iso(new Date())} />
+        </MoreFilters>
       </HeaderActions>
 
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">

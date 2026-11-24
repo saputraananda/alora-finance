@@ -11,9 +11,11 @@ import {
   HiOutlineXMark,
 } from "react-icons/hi2";
 import { api, getToken } from "../../../lib/api";
-import { currentCutoffKey, cutoffMonthLabel, cutoffRangeLabel, recentCutoffKeys } from "../../../lib/cutoff";
+import { cutoffRangeLabel } from "../../../lib/cutoff";
+import { defaultPeriod, periodChanged, periodLabel } from "../../../lib/period";
 import ConfirmModal from "../../../components/ui/ConfirmModal";
-import { FieldSelect, HeaderActions, RefreshButton } from "../../../components/ui/PageHeader";
+import PeriodPicker from "../../../components/ui/PeriodPicker";
+import { FieldSelect, HeaderActions, MoreFilters, RefreshButton } from "../../../components/ui/PageHeader";
 
 const cn = (...c) => c.filter(Boolean).join(" ");
 const rp = (n) => new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 }).format(Number(n) || 0);
@@ -106,7 +108,8 @@ function MatchModal({ stmt, candidates, onClose, onSaved }) {
 }
 
 export default function BankRekon() {
-  const [month, setMonth] = useState(currentCutoffKey());
+  const [period, setPeriod] = useState(() => defaultPeriod());
+  const month = period.cutoff;
   const [bankId, setBankId] = useState("");
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -163,6 +166,13 @@ export default function BankRekon() {
     URL.revokeObjectURL(url);
   };
 
+  const defaultBankId = data?.banks?.[0] ? String(data.banks[0].id) : "";
+  const filterCount = (bankId && defaultBankId && bankId !== defaultBankId ? 1 : 0) + (periodChanged(period, defaultPeriod()) ? 1 : 0);
+  const resetFilters = () => {
+    setPeriod(defaultPeriod());
+    if (defaultBankId) setBankId(defaultBankId);
+  };
+
   const s = data?.summary;
   const body = { bank_account_id: Number(bankId), year: ym[0], month: ym[1] };
 
@@ -180,14 +190,13 @@ export default function BankRekon() {
       )}
 
       <HeaderActions>
-        <FieldSelect label="Rekening" value={bankId} onChange={setBankId}>
-          {(data?.banks || []).map((b) => <option key={b.id} value={b.id}>{b.outlet_name} · {b.bank_name} {b.account_no}</option>)}
-        </FieldSelect>
-        {/* Aktivitas Bank memang per bulan cutoff, jadi Periode tetap pilihan bulan */}
-        <FieldSelect label="Periode" value={month} onChange={setMonth} title={cutoffRangeLabel(month)}>
-          {recentCutoffKeys(18).map((k) => <option key={k} value={k}>{cutoffMonthLabel(k)}</option>)}
-        </FieldSelect>
-        <span className="text-[11px] font-medium text-slate-400">{cutoffRangeLabel(month)}</span>
+        <MoreFilters count={filterCount} summary={periodLabel(period)} onReset={resetFilters}>
+          <FieldSelect label="Rekening" value={bankId} onChange={setBankId}>
+            {(data?.banks || []).map((b) => <option key={b.id} value={b.id}>{b.outlet_name} · {b.bank_name} {b.account_no}</option>)}
+          </FieldSelect>
+          {/* API Aktivitas Bank hanya menerima bulan cutoff (year/month), jadi hanya jenis Cutoff yang ditawarkan */}
+          <PeriodPicker value={period} onChange={setPeriod} modes={["cutoff"]} />
+        </MoreFilters>
         <RefreshButton onClick={load} spinning={loading} />
       </HeaderActions>
 

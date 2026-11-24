@@ -3,7 +3,9 @@ import { Link } from "react-router-dom";
 import { HiOutlineArrowUpTray, HiOutlineCheckCircle, HiOutlineChevronDown, HiOutlineExclamationTriangle, HiOutlineXMark } from "react-icons/hi2";
 import { api } from "../../../lib/api";
 import { DetailJurnalModal } from "../../../components/DetailJurnalModal";
-import { FieldDateRange, FieldMultiSelect, FieldSelect, HeaderActions, MoreFilters, PrimaryButton, RefreshButton, TabActiveContext } from "../../../components/ui/PageHeader";
+import PeriodPicker from "../../../components/ui/PeriodPicker";
+import { defaultPeriod, periodChanged, periodLabel, periodRange } from "../../../lib/period";
+import { FieldMultiSelect, FieldSelect, HeaderActions, MoreFilters, PrimaryButton, RefreshButton, TabActiveContext } from "../../../components/ui/PageHeader";
 
 const cn = (...c) => c.filter(Boolean).join(" ");
 const rupiah = (n) => new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 }).format(Number(n) || 0);
@@ -26,8 +28,9 @@ function GlCell({ r, onOpen }) {
 
 // Account Receivable › Hasil Rekonsiliasi: semua pencocokan (Rekonsiliasi transaksi). Pilih baris → Transfer to GL, satu jurnal per baris.
 export default function HasilRekon({ onGoto, initialDate, initialOutlet }) {
-  const [from, setFrom] = useState(initialDate || daysAgo(30));
-  const [to, setTo] = useState(initialDate || iso(new Date()));
+  const basePeriod = useMemo(() => defaultPeriod({ mode: "date", from: initialDate || daysAgo(30), to: initialDate || iso(new Date()) }), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const [period, setPeriod] = useState(basePeriod);
+  const { from, to } = periodRange(period);
   const [outlet, setOutlet] = useState(initialOutlet ? String(initialOutlet) : "");
   const [methods, setMethods] = useState([]);
   const [status, setStatus] = useState("");
@@ -92,13 +95,16 @@ export default function HasilRekon({ onGoto, initialDate, initialOutlet }) {
     <div className="space-y-4">
       {journalId && <DetailJurnalModal open journalId={journalId} onClose={() => setJournalId(null)} onReversed={() => { setJournalId(null); load(); }} />}
       <HeaderActions>
-        <FieldSelect label="Cabang" value={outlet} onChange={setOutlet}>
-          <option value="">Semua</option>
-          {outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-        </FieldSelect>
-        <FieldMultiSelect label="Metode" options={METHODS} value={methods} onChange={setMethods} />
-        <FieldDateRange from={from} to={to} max={iso(new Date())} onChange={(f, t) => { setFrom(f); setTo(t); }} />
-        <MoreFilters count={(status ? 1 : 0) + (gl ? 1 : 0)} onReset={() => { setStatus(""); setGl(""); setSel(new Set()); }}>
+        <MoreFilters
+          count={(outlet ? 1 : 0) + (methods.length ? 1 : 0) + (status ? 1 : 0) + (gl ? 1 : 0) + (periodChanged(period, basePeriod) ? 1 : 0)}
+          summary={periodLabel(period)}
+          onReset={() => { setOutlet(""); setMethods([]); setStatus(""); setGl(""); setPeriod(basePeriod); setSel(new Set()); }}
+        >
+          <FieldSelect label="Cabang" value={outlet} onChange={setOutlet}>
+            <option value="">Semua</option>
+            {outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+          </FieldSelect>
+          <FieldMultiSelect label="Metode" options={METHODS} value={methods} onChange={setMethods} />
           <FieldSelect label="Status" value={status} onChange={setStatus}>
             <option value="">Semua</option>
             <option value="Matched">Matched</option>
@@ -109,6 +115,7 @@ export default function HasilRekon({ onGoto, initialDate, initialOutlet }) {
             <option value="SUDAH">Sudah di GL</option>
             <option value="">Semua</option>
           </FieldSelect>
+          <PeriodPicker value={period} onChange={setPeriod} maxDate={iso(new Date())} />
         </MoreFilters>
         <PrimaryButton onClick={transfer} disabled={busy || !picked.length} icon={HiOutlineArrowUpTray}>
           {busy ? "Memproses..." : picked.length ? `Transfer to GL (${picked.length})` : "Transfer to GL"}

@@ -3,7 +3,9 @@ import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { HiOutlineArrowUpTray, HiOutlineChevronDown, HiOutlineChevronRight, HiOutlineExclamationTriangle, HiOutlineMagnifyingGlass, HiOutlinePhoto, HiOutlineXMark } from "react-icons/hi2";
 import { api } from "../../../lib/api";
-import DateFilter, { useDateFilter } from "../../../components/DateFilter";
+import PeriodPicker from "../../../components/ui/PeriodPicker";
+import { defaultPeriod, periodChanged, periodLabel, periodRange, yesterdayWib } from "../../../lib/period";
+import { todayWib } from "../../../lib/cutoff";
 import NotaModal from "../../../components/NotaModal";
 import { FieldMultiSelect, FieldSelect, HeaderActions, MoreFilters, PrimaryButton, RefreshButton } from "../../../components/ui/PageHeader";
 import ImportMutasi from "./ImportMutasi";
@@ -346,7 +348,8 @@ function Detail({ target, onClose, onChanged }) {
 }
 
 export default function Workspace() {
-  const date = useDateFilter("cutoff");
+  const [period, setPeriod] = useState(() => defaultPeriod({ mode: "date", from: yesterdayWib(), to: yesterdayWib() }));
+  const range = periodRange(period);
   const [bankId, setBankId] = useState("ALL"); // ALL = Semua rekening
   const [outlet, setOutlet] = useState("");
   const [methods, setMethods] = useState([]); // Metode: boleh lebih dari satu
@@ -383,11 +386,10 @@ export default function Workspace() {
   const seq = useRef(0);
 
   const load = useCallback(async () => {
-    if (!date.ready) return;
     const my = ++seq.current;
     setLoading(true);
     try {
-      const qs = new URLSearchParams({ from: date.from || "", to: date.to || "", status: statusF });
+      const qs = new URLSearchParams({ from: range.from || "", to: range.to || "", status: statusF });
       if (bankId) qs.set("bank_account_id", bankId);
       if (outlet) qs.set("outlet", outlet);
       if (methods.length) qs.set("method", methods.join(","));
@@ -401,7 +403,7 @@ export default function Workspace() {
     } finally {
       if (my === seq.current) setLoading(false);
     }
-  }, [date.ready, date.from, date.to, bankId, outlet, methods, statusF, allocF]);
+  }, [range.from, range.to, bankId, outlet, methods, statusF, allocF]);
   useEffect(() => { load(); }, [load]);
 
   const internal = data?.internal || [];
@@ -544,13 +546,15 @@ export default function Workspace() {
   return (
     <div className="space-y-4">
       <HeaderActions>
-        <FieldSelect label="Cabang" value={outlet} onChange={setOutlet}>
-          <option value="">Semua</option>
-          {(data?.outlets || []).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-        </FieldSelect>
-        {/* Periode: tetap memakai DateFilter (mode Cutoff / Rentang Tanggal), versi ringkas agar muat di header */}
-        <DateFilter f={date} modes={["cutoff", "range"]} compact />
-        <MoreFilters count={(bankId !== "ALL" ? 1 : 0) + (methods.length ? 1 : 0) + (statusF !== "belum" ? 1 : 0)} onReset={() => { setBankId("ALL"); clear(); setMethods([]); setStatusF("belum"); setAllocF(""); }}>
+        <MoreFilters
+          count={(outlet ? 1 : 0) + (bankId !== "ALL" ? 1 : 0) + (methods.length ? 1 : 0) + (statusF !== "belum" ? 1 : 0) + (periodChanged(period, defaultPeriod({ mode: "date", from: yesterdayWib(), to: yesterdayWib() })) ? 1 : 0)}
+          summary={periodLabel(period)}
+          onReset={() => { setOutlet(""); setBankId("ALL"); clear(); setMethods([]); setStatusF("belum"); setAllocF(""); setPeriod(defaultPeriod({ mode: "date", from: yesterdayWib(), to: yesterdayWib() })); }}
+        >
+          <FieldSelect label="Cabang" value={outlet} onChange={setOutlet}>
+            <option value="">Semua</option>
+            {(data?.outlets || []).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+          </FieldSelect>
           <FieldSelect label="Rekening" value={bankId} onChange={(v) => { setBankId(v); clear(); }} selectClassName="max-w-[260px]">
             <option value="ALL">Semua rekening</option>
             {(data?.banks || []).map((b) => <option key={b.id} value={b.id}>{b.bank_name} {b.account_no}{b.holder ? ` · ${b.holder}` : ""}</option>)}
@@ -560,6 +564,7 @@ export default function Workspace() {
             <option value="belum">Belum selesai</option><option value="all">Semua</option><option value="Matched">Matched</option>
             {Object.entries(STATUS).filter(([k]) => !["Matched"].includes(k)).map(([k, v]) => <option key={k} value={k}>{v[0].replace(/^\S+ /, "")}</option>)}
           </FieldSelect>
+          <PeriodPicker value={period} onChange={setPeriod} maxDate={todayWib()} />
         </MoreFilters>
         <button type="button" onClick={() => setShowImport(true)} className="flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:border-emerald-400 hover:text-emerald-700"><HiOutlineArrowUpTray className="h-4 w-4" /> Import Excel/CSV</button>
         <PrimaryButton onClick={autoMatch}>✦ Auto match</PrimaryButton>
