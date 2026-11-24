@@ -3,11 +3,10 @@ import { Link } from "react-router-dom";
 import { HiOutlineCheckCircle, HiOutlineExclamationTriangle } from "react-icons/hi2";
 import { api } from "../../../lib/api";
 import { currentCutoffKey, cutoffMonthLabel, cutoffRangeLabel, recentCutoffKeys } from "../../../lib/cutoff";
+import { FieldSelect, HeaderActions, RefreshButton } from "../../../components/ui/PageHeader";
 
 const cn = (...c) => c.filter(Boolean).join(" ");
 const rp = (n) => new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 }).format(Number(n) || 0);
-const selectCls =
-  "rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10";
 const th = "px-3 py-2.5 text-[10px] font-bold uppercase tracking-wider text-slate-400";
 
 // Tutup Buku > Alokasi biaya pusat (Referensi hal. 27)
@@ -51,22 +50,19 @@ export default function AlokasiBiayaPusat() {
   };
 
   return (
-    <div className="space-y-4 p-4 sm:p-6">
-      <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
-        <label className="flex items-center gap-1.5">Periode:
-          <select value={month} onChange={(e) => setMonth(e.target.value)} className={selectCls}>
-            {recentCutoffKeys(18).map((k) => <option key={k} value={k}>{cutoffMonthLabel(k)}</option>)}
-          </select>
-        </label>
-        <span className="text-[11px] font-medium text-slate-400">{cutoffRangeLabel(month)}</span>
-        <label className="ml-auto flex items-center gap-1.5">Pembulatan:
-          <select value={rounding} onChange={(e) => setRounding(e.target.value)} className={selectCls}>
-            <option value="JUTA">ke juta terdekat</option>
-            <option value="RIBU">ke ribu terdekat</option>
-            <option value="NONE">tanpa pembulatan</option>
-          </select>
-        </label>
-      </div>
+    <div className="space-y-4">
+      <HeaderActions>
+        <FieldSelect label="Pembulatan" value={rounding} onChange={setRounding}>
+          <option value="JUTA">ke juta terdekat</option>
+          <option value="RIBU">ke ribu terdekat</option>
+          <option value="NONE">tanpa pembulatan</option>
+        </FieldSelect>
+        <FieldSelect label="Periode" value={month} onChange={setMonth} title={cutoffRangeLabel(month)}>
+          {recentCutoffKeys(18).map((k) => <option key={k} value={k}>{cutoffMonthLabel(k)}</option>)}
+        </FieldSelect>
+        <span className="hidden text-[11px] font-medium text-slate-400 sm:inline">{cutoffRangeLabel(month)}</span>
+        <RefreshButton onClick={load} spinning={loading} />
+      </HeaderActions>
 
       {msg && (
         <div className={cn("flex items-start gap-2 rounded-xl border p-3 text-xs font-medium", msg.type === "ok" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-rose-200 bg-rose-50 text-rose-700")}>
@@ -105,7 +101,7 @@ export default function AlokasiBiayaPusat() {
                 <thead className="border-b border-slate-100 bg-slate-50"><tr><th className={th}>Cabang</th><th className={cn(th, "text-right")}>Pendapatan</th><th className={cn(th, "text-right")}>Porsi</th><th className={cn(th, "text-right")}>Alokasi</th></tr></thead>
                 <tbody className="divide-y divide-slate-100">
                   {data.rows.length === 0 ? (
-                    <tr><td colSpan={4} className="py-8 text-center text-slate-400">Belum ada pendapatan cabang di jurnal periode ini. <Link to="/finance-ho/integrasi-pos" className="font-bold text-emerald-700 hover:underline">Posting dari Integrasi POS</Link>.</td></tr>
+                    <tr><td colSpan={4} className="py-8 text-center text-slate-400">Belum ada pendapatan cabang di jurnal periode ini. <Link to="/finance-ho/integrasi-pos" className="font-bold text-emerald-700 hover:underline">Lihat Front Office Cashier</Link>.</td></tr>
                   ) : (
                     data.rows.map((r) => (
                       <tr key={r.outlet_id}><td className="px-3 py-2.5 font-bold text-slate-800">{r.outlet_name}</td><td className="px-3 py-2.5 text-right tabular-nums">{rp(r.revenue)}</td><td className="px-3 py-2.5 text-right tabular-nums text-slate-500">{String(r.share).replace(".", ",")}%</td><td className="px-3 py-2.5 text-right font-semibold tabular-nums">{rp(r.amount)}</td></tr>

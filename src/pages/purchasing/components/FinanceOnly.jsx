@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { HiOutlineLockClosed } from "react-icons/hi2";
 import { api } from "../../../lib/api";
 
-// Menu Pembelian hanya untuk tim Finance. Penegakan sebenarnya ada di backend;
+// Menu Account Payable hanya untuk tim Finance. Penegakan sebenarnya ada di backend;
 // komponen ini hanya menampilkan pesan yang jelas bila akses ditolak.
 export default function FinanceOnly({ children }) {
   const [state, setState] = useState("loading"); // loading | ok | denied | error
@@ -31,7 +31,7 @@ export default function FinanceOnly({ children }) {
       </div>
       <h2 className="text-sm font-bold text-slate-800">Akses ditolak</h2>
       <p className="mt-1 text-xs text-slate-500">
-        {state === "denied" ? "Menu Pembelian hanya untuk tim Finance." : message || "Gagal memeriksa hak akses."}
+        {state === "denied" ? "Menu Account Payable hanya untuk tim Finance." : message || "Gagal memeriksa hak akses."}
       </p>
     </div>
   );

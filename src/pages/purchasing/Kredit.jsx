@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { HiOutlineArrowPath, HiOutlineCreditCard } from "react-icons/hi2";
+import { HiOutlineCreditCard } from "react-icons/hi2";
 import { api } from "../../lib/api";
+import PageHeader, { FieldSelect, RefreshButton } from "../../components/ui/PageHeader";
 import FinanceOnly from "./components/FinanceOnly";
 import RequestDetailModal from "./components/RequestDetailModal";
-import { cn, dmy, rp, selectCls, thCls } from "./utils/format";
+import { cn, dmy, rp, thCls } from "./utils/format";
 
 function Kpi({ label, value, hint, tone }) {
   return (
@@ -55,26 +56,20 @@ export default function Kredit() {
       <div className="space-y-5 p-4 sm:p-6">
         {openId && <RequestDetailModal id={openId} onClose={() => setOpenId(null)} />}
 
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <p className="text-[11px] font-semibold text-slate-400">Pembelian</p>
-            <div className="mt-0.5 flex items-center gap-2">
-              <div className="rounded-xl bg-amber-50 p-2 text-amber-700"><HiOutlineCreditCard className="h-5 w-5" /></div>
-              <h1 className="text-lg font-extrabold tracking-tight text-slate-800">Kredit & cicilan</h1>
-            </div>
-            <p className="mt-1 text-xs text-slate-500">Pengajuan yang dibayar kredit. Sisa yang belum dibayar menjadi hutang usaha.</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <select value={paid} onChange={(e) => setPaid(e.target.value)} className={selectCls}>
-              <option value="unpaid">Belum lunas</option>
-              <option value="paid">Lunas</option>
-              <option value="">Semua</option>
-            </select>
-            <button type="button" onClick={load} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:border-emerald-400 hover:text-emerald-700">
-              <HiOutlineArrowPath className={cn("h-4 w-4", loading && "animate-spin")} /> Muat ulang
-            </button>
-          </div>
-        </div>
+        <PageHeader
+          crumb="Account Payable"
+          icon={HiOutlineCreditCard}
+          tone="bg-orange-50 text-orange-700"
+          title="Kredit & cicilan"
+          subtitle="Pengajuan yang dibayar kredit. Sisa yang belum dibayar menjadi hutang usaha."
+        >
+          <FieldSelect value={paid} onChange={setPaid} title="Status pelunasan">
+            <option value="unpaid">Belum lunas</option>
+            <option value="paid">Lunas</option>
+            <option value="">Semua</option>
+          </FieldSelect>
+          <RefreshButton onClick={load} spinning={loading} />
+        </PageHeader>
 
         {error && <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{error}</p>}
 

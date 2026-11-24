@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { HiOutlineCheckCircle, HiOutlineTag } from "react-icons/hi2";
 import { api } from "../../lib/api";
+import PageHeader from "../../components/ui/PageHeader";
 import FinanceOnly from "./components/FinanceOnly";
 import { cn, rp, selectCls, thCls } from "./utils/format";
 
@@ -53,17 +54,15 @@ export default function Klasifikasi({ embedded = false }) {
   return (
     <FinanceOnly>
       <div className={embedded ? "space-y-5" : "space-y-5 p-4 sm:p-6"}>
-        {!embedded && <div>
-          <p className="text-[11px] font-semibold text-slate-400">Pembelian</p>
-          <div className="mt-0.5 flex items-center gap-2">
-            <div className="rounded-xl bg-slate-100 p-2 text-slate-700"><HiOutlineTag className="h-5 w-5" /></div>
-            <h1 className="text-lg font-extrabold tracking-tight text-slate-800">Klasifikasi pengajuan</h1>
-          </div>
-          <p className="mt-1 text-xs text-slate-500">
-            Kategori biaya yang diisi Finance saat membayar. Tiap klasifikasi dipetakan ke akun supaya pembayaran bisa dijurnal otomatis.
-            Pilih akun beban, atau akun aset bila yang dibeli berupa barang yang disusutkan. Pemetaan disimpan di alfi, tidak mengubah SuperApp.
-          </p>
-        </div>}
+        {!embedded && (
+          <PageHeader
+            crumb="Account Payable"
+            icon={HiOutlineTag}
+            tone="bg-orange-50 text-orange-700"
+            title="Klasifikasi pengajuan"
+            subtitle="Kategori biaya yang diisi Finance saat membayar. Tiap klasifikasi dipetakan ke akun supaya pembayaran bisa dijurnal otomatis. Pilih akun beban, atau akun aset bila yang dibeli berupa barang yang disusutkan. Pemetaan disimpan di alfi, tidak mengubah SuperApp."
+          />
+        )}
 
         {error && <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{error}</p>}
 
