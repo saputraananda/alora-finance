@@ -3,7 +3,8 @@ import { toFixed2 } from "../../utils/currencyHelpers.js";
 import { cutoffRange, currentCutoffMonth } from "../dashboard/dashboard.controller.js";
 
 // ════════════════════════════════════════════════════════════════════════════
-// PELANGGAN > DEPOSIT MEMBER
+// CUSTOMER > RIWAYAT DEPOSIT (deposit transaksi reguler — BUKAN deposit paket member)
+// Deposit reguler = baris tr_customer_deposit tanpa membership_id; top-up paket member (membership_id terisi) tidak ikut.
 // "Saldo deposit di POS selalu sama dengan akun" — Konsep hal. 10:
 //   saldo semua member di POS  =  saldo akun Deposit Member (kewajiban) di jurnal.
 // Catatan sumber data POS:
@@ -43,7 +44,10 @@ export async function getDepositOverview(req, res) {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 25));
 
-    const { start, end } = cutoffRange(year, month);
+    // Rentang tanggal: from/to (YYYY-MM-DD) bila dikirim, selain itu bulan cutoff year/month
+    const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ""));
+    const useRange = isDate(req.query.from) && isDate(req.query.to);
+    const { start, end } = useRange ? { start: String(req.query.from), end: String(req.query.to) } : cutoffRange(year, month);
     const today = todayWib();
     const dormantBefore = addMonths(today, -12);
 
@@ -51,12 +55,12 @@ export async function getDepositOverview(req, res) {
       `SELECT c.id, c.name, c.phone, c.preferred_outlet_id, c.deposit_balance,
               DATE_FORMAT(c.last_transaction_at, '%Y-%m-%d') AS last_tx
        FROM mst_customer c
-       WHERE c.deposit_balance <> 0 OR c.id IN (SELECT DISTINCT customer_id FROM tr_customer_deposit)${outletId ? " AND 1=1" : ""}`
+       WHERE c.id IN (SELECT DISTINCT customer_id FROM tr_customer_deposit WHERE membership_id IS NULL)`
     );
     const [topups] = await myWaschenPool.query(
       `SELECT customer_id, SUM(amount) AS amt, SUM(balance_after - balance_before - amount) AS bonus
        FROM tr_customer_deposit
-       WHERE type = 'Topup' AND created_at >= ? AND created_at < DATE_ADD(?, INTERVAL 1 DAY)
+       WHERE type = 'Topup' AND membership_id IS NULL AND created_at >= ? AND created_at < DATE_ADD(?, INTERVAL 1 DAY)
        GROUP BY customer_id`,
       [start, end]
     );
@@ -94,7 +98,7 @@ export async function getDepositOverview(req, res) {
       })
       .filter((m) => !outletId || m.outlet_id === outletId);
 
-    // KPI selalu dari seluruh member (cabang yang dipilih hanya menyaring tabel & ringkasan periode)
+    // Dua kartu: total deposit (top-up reguler pada periode) dan jumlah customer yang pernah deposit
     const posBalance = toFixed2(all.reduce((s, m) => s + m.balance, 0));
     const acc = await accountBalance(end < today ? end : today);
     const diff = toFixed2(posBalance - acc.balance);
@@ -121,6 +125,8 @@ export async function getDepositOverview(req, res) {
         topup_period: toFixed2(all.reduce((s, m) => s + m.topup, 0)),
         bonus_period: toFixed2(all.reduce((s, m) => s + m.bonus, 0)),
         used_period: toFixed2(all.reduce((s, m) => s + m.used, 0)),
+        total_customers: all.length,
+        customers_period: all.filter((m) => m.topup || m.used).length,
       },
       outlets: outlets.map((o) => ({ id: o.id, name: o.name })),
       rows: rows.slice((page - 1) * limit, page * limit),
@@ -132,30 +138,43 @@ export async function getDepositOverview(req, res) {
   }
 }
 
-// ── GET /customers/deposit/:id — mutasi satu member ─────────────────────
+// ── GET /customers/deposit/:id — riwayat deposit reguler satu customer (Masuk = top-up, Keluar = dipakai bayar nota) ──
 export async function getMemberMutations(req, res) {
   try {
     const id = Number(req.params.id);
+    const outlets = await getOutlets();
+    const nameOf = new Map(outlets.map((o) => [o.id, o.name]));
     const [topups] = await myWaschenPool.query(
-      `SELECT DATE_FORMAT(created_at, '%Y-%m-%d %H:%i') AS at, 'Top-up' AS jenis, amount,
-              (balance_after - balance_before - amount) AS bonus, balance_after, payment_method, notes
-       FROM tr_customer_deposit WHERE customer_id = ? ORDER BY created_at DESC LIMIT 200`,
+      `SELECT id, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i') AS at, outlet_id, amount, (balance_after - balance_before - amount) AS bonus,
+              balance_after, payment_method, payment_proof_url, notes
+       FROM tr_customer_deposit WHERE customer_id = ? AND type = 'Topup' AND membership_id IS NULL ORDER BY created_at DESC LIMIT 200`,
       [id]
     );
     const [usage] = await myWaschenPool.query(
-      `SELECT DATE_FORMAT(l.created_at, '%Y-%m-%d %H:%i') AS at, 'Pemakaian' AS jenis, l.amount, 0 AS bonus,
-              NULL AS balance_after, l.payment_method, CONCAT('Nota ', t.order_no) AS notes
+      `SELECT l.id, DATE_FORMAT(l.created_at, '%Y-%m-%d %H:%i') AS at, t.outlet_id, l.amount, l.payment_method, l.payment_proof_url,
+              t.id AS transaction_id, t.order_no
        FROM tr_payment_log l JOIN tr_transaction t ON t.id = l.transaction_id
        WHERE t.customer_id = ? AND l.payment_method LIKE 'Potong Saldo%' AND t.is_delete_requested = 0
        ORDER BY l.created_at DESC LIMIT 200`,
       [id]
     );
-    const [c] = await myWaschenPool.query(`SELECT name, deposit_balance FROM mst_customer WHERE id = ?`, [id]);
-    const rows = [...topups, ...usage]
-      .map((r) => ({ ...r, amount: toFixed2(r.amount), bonus: toFixed2(r.bonus), balance_after: r.balance_after == null ? null : toFixed2(r.balance_after) }))
-      .sort((a, b) => (a.at < b.at ? 1 : -1));
-    return res.json({ member: { id, name: c[0]?.name || "-", balance: toFixed2(c[0]?.deposit_balance || 0) }, rows });
+    const [c] = await myWaschenPool.query(`SELECT name, phone, deposit_balance FROM mst_customer WHERE id = ?`, [id]);
+    const base = String(process.env.POS_ASSET_BASE_URL || "").replace(/\/+$/, "");
+    const proof = (u) => (!u ? null : /^https?:\/\//i.test(u) ? u : base ? `${base}${u.startsWith("/") ? "" : "/"}${u}` : null);
+    const rows = [
+      ...topups.map((r) => ({
+        key: `t${r.id}`, at: r.at, tipe: "Masuk", kategori: r.bonus > 0 ? "Top-up + bonus" : "Top-up deposit", sumber: r.payment_method || "-",
+        keterangan: r.notes || "-", nominal: toFixed2(r.amount), proof: proof(r.payment_proof_url), has_proof: Boolean(r.payment_proof_url),
+        outlet_name: nameOf.get(Number(r.outlet_id)) || "-", transaction_id: null, order_no: null,
+      })),
+      ...usage.map((r) => ({
+        key: `u${r.id}`, at: r.at, tipe: "Keluar", kategori: "Pakai saldo", sumber: r.payment_method || "-",
+        keterangan: `Nota ${r.order_no}`, nominal: -toFixed2(r.amount), proof: proof(r.payment_proof_url), has_proof: Boolean(r.payment_proof_url),
+        outlet_name: nameOf.get(Number(r.outlet_id)) || "-", transaction_id: Number(r.transaction_id), order_no: r.order_no,
+      })),
+    ].sort((a, b) => (a.at < b.at ? 1 : -1));
+    return res.json({ member: { id, name: c[0]?.name || "-", phone: c[0]?.phone || null, balance: toFixed2(c[0]?.deposit_balance || 0) }, rows });
   } catch (err) {
-    return res.status(500).json({ message: "Gagal memuat mutasi member", error: err.message });
+    return res.status(500).json({ message: "Gagal memuat riwayat deposit", error: err.message });
   }
 }
