@@ -22,6 +22,39 @@ export async function getGeneralLedger(req, res) {
             return res.status(400).json({ message: "Pilih akun finansial terlebih dahulu." });
         }
 
+        // "Semua akun": daftar mutasi semua akun (tanpa saldo berjalan), maksimal 2000 baris
+        if (account_id === "ALL") {
+            const fromAll = from || "1970-01-01";
+            const toAll = to || new Date().toISOString().split("T")[0];
+            const LIMIT = 2000;
+            const [rows] = await pool.query(
+                `SELECT je.id AS entry_id, je.entry_no, DATE_FORMAT(je.entry_date, '%Y-%m-%d') AS entry_date,
+                        je.description AS journal_description, jl.id AS line_id, jl.line_no, jl.debit, jl.credit, jl.memo,
+                        jl.outlet_id, je.source_type, c.code AS account_code, c.name AS account_name
+                   FROM tr_journal_lines jl
+                   JOIN tr_journal_entries je ON jl.entry_id = je.id
+                   JOIN mst_coa c ON c.id = jl.account_id
+                  WHERE je.status IN ('POSTED','REVERSED') AND je.entry_date >= ? AND je.entry_date <= ?${oc}
+                  ORDER BY je.entry_date ASC, je.id ASC, jl.line_no ASC
+                  LIMIT ${LIMIT + 1}`,
+                [fromAll, toAll, ...op]
+            );
+            const truncated = rows.length > LIMIT;
+            const list = (truncated ? rows.slice(0, LIMIT) : rows).map((m) => ({ ...m, debit: Number(m.debit) || 0, credit: Number(m.credit) || 0, running_balance: null }));
+            const pd = toFixed2(list.reduce((t, m) => t + m.debit, 0));
+            const pc = toFixed2(list.reduce((t, m) => t + m.credit, 0));
+            return res.json({
+                data: {
+                    all: true,
+                    truncated,
+                    account: { id: "ALL", code: "SEMUA", name: "Semua akun", type: null, normal_balance: null },
+                    period: { from: fromAll, to: toAll, outlet: outlet || null },
+                    summary: { beginning_balance: null, period_debit: pd, period_credit: pc, net_change: null, ending_balance: null },
+                    mutations: list,
+                },
+            });
+        }
+
         // 1. Ambil info akun
         const [accRows] = await pool.query(
             `SELECT id, code, name, type, normal_balance, is_header, is_active, memo
