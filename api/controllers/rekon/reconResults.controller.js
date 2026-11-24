@@ -82,7 +82,7 @@ async function loadRefs(matches) {
 }
 
 // Hitung tampilan + jurnal tiap pencocokan
-async function buildResults(matches) {
+async function buildResults(matches, { skipBankLock = false } = {}) {
   if (!matches.length) return [];
   const [outlets, accMap, ov, refs] = await Promise.all([getOutlets(), loadAccountMap(), loadOutletOverrides(), loadRefs(matches)]);
   const oname = new Map(outlets.map((o) => [Number(o.id), o.name]));
@@ -206,7 +206,7 @@ async function buildResults(matches) {
       }
       if (viaSource && Math.abs(diff) <= TOL) lines.length = 0; // nota transfer / jurnal tanpa selisih: tidak ada yang dipindahkan
     }
-    if (!blockers.length && bankDate) {
+    if (!blockers.length && bankDate && !skipBankLock) {
       const lockMsg = await lockDateMessage(bankDate);
       if (lockMsg) blockers.push(lockMsg);
     }
@@ -280,14 +280,25 @@ export async function getResults(req, res) {
   }
 }
 
-// ── POST /rekon/results/transfer {match_ids:[...]} — satu jurnal per pencocokan ────────
+// ── POST /rekon/results/transfer {match_ids:[...], entry_date?:'YYYY-MM-DD'} — satu jurnal per pencocokan ────────
 export async function transferResults(req, res) {
   const ids = [...new Set((Array.isArray(req.body?.match_ids) ? req.body.match_ids : []).map(Number).filter(Boolean))];
   if (!ids.length) return res.status(422).json({ message: "Pilih minimal satu hasil rekonsiliasi." });
   if (ids.length > 300) return res.status(422).json({ message: "Maksimal 300 baris sekali transfer." });
   const actor = req.user?.id || null;
+  // Tanggal jurnal opsional (YYYY-MM-DD): bila kosong, tiap jurnal bertanggal mutasi bank pencocokannya
+  const rawDate = req.body?.entry_date;
+  const chosen = rawDate === undefined || rawDate === null || rawDate === "" ? null : String(rawDate).trim();
   try {
-    const rows = await buildResults(await loadMatches({ ids }));
+    if (chosen) {
+      const real = /^\d{4}-\d{2}-\d{2}$/.test(chosen) && !Number.isNaN(Date.parse(`${chosen}T00:00:00Z`)) && new Date(`${chosen}T00:00:00Z`).toISOString().slice(0, 10) === chosen;
+      if (!real) return res.status(422).json({ message: "Tanggal jurnal tidak valid. Gunakan format tanggal yang benar (YYYY-MM-DD)." });
+      const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
+      if (chosen > today) return res.status(422).json({ message: "Tanggal jurnal tidak boleh melewati hari ini." });
+      const lockMsg = await lockDateMessage(chosen);
+      if (lockMsg) return res.status(422).json({ message: lockMsg });
+    }
+    const rows = await buildResults(await loadMatches({ ids }), { skipBankLock: !!chosen });
     const results = [];
     for (const id of ids) {
       const r = rows.find((x) => x.match_id === id);
@@ -304,11 +315,14 @@ export async function transferResults(req, res) {
         const [[cnt]] = await conn.query(`SELECT COUNT(*) AS n FROM tr_journal_entries WHERE source_ref = ?`, [`MATCH-${id}`]).then(([x]) => [x]);
         const entryNo = cnt.n ? `${base}-v${cnt.n + 1}` : base;
         const total = toFixed2(r.lines.reduce((s, l) => s + l.debit, 0));
-        const desc = `Rekonsiliasi ${r.outlet_name} — ${r.internal.map((i) => i.label).join(", ")}`.slice(0, 500);
+        const entryDate = chosen || r.date;
+        const dmyStr = (d) => `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}`;
+        const note = chosen && r.date && chosen !== r.date ? ` (mutasi bank ${dmyStr(r.date)}, dibukukan ${dmyStr(chosen)})` : "";
+        const desc = `Rekonsiliasi ${r.outlet_name} — ${r.internal.map((i) => i.label).join(", ")}`.slice(0, 500 - note.length) + note;
         const [h] = await conn.query(
           `INSERT INTO tr_journal_entries (entry_no, entry_date, description, status, total_amount, created_by, source_type, source_ref, outlet_id, approved_by, approved_at)
            VALUES (?, ?, ?, 'POSTED', ?, ?, 'REKONSILIASI', ?, ?, ?, NOW())`,
-          [entryNo, r.date, desc, total, actor, `MATCH-${id}`, r.outlet_id || null, actor]
+          [entryNo, entryDate, desc, total, actor, `MATCH-${id}`, r.outlet_id || null, actor]
         );
         for (let n = 0; n < r.lines.length; n++) {
           const l = r.lines[n];

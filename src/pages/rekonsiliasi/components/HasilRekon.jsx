@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { HiOutlineArrowUpTray, HiOutlineCheckCircle, HiOutlineChevronDown, HiOutlineExclamationTriangle, HiOutlineXMark } from "react-icons/hi2";
 import { api } from "../../../lib/api";
@@ -43,6 +44,9 @@ export default function HasilRekon({ onGoto, initialDate, initialOutlet }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const [journalId, setJournalId] = useState(null);
+  const [ask, setAsk] = useState(false);
+  const [dateMode, setDateMode] = useState("bank");
+  const [pickDate, setPickDate] = useState("");
   const active = useContext(TabActiveContext);
 
   useEffect(() => { api("/finance-ho/journals/meta").then((r) => setOutlets(r.outlets || [])).catch(() => {}); }, []);
@@ -74,18 +78,30 @@ export default function HasilRekon({ onGoto, initialDate, initialOutlet }) {
   const toggle = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleOpen = (id) => setOpen((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
+  const openTransfer = () => { setDateMode("bank"); setPickDate(iso(new Date())); setAsk(true); };
+  useEffect(() => {
+    if (!ask) return undefined;
+    const esc = (e) => { if (e.key === "Escape" && !busy) setAsk(false); };
+    document.addEventListener("keydown", esc);
+    return () => document.removeEventListener("keydown", esc);
+  }, [ask, busy]);
+
   const transfer = async () => {
     if (!picked.length) return;
+    if (dateMode === "pick" && !pickDate) return;
     setBusy(true);
     setMsg(null);
     try {
-      const res = await api("/finance-ho/rekon/results/transfer", { method: "POST", body: JSON.stringify({ match_ids: picked.map((r) => r.match_id) }) });
+      const body = { match_ids: picked.map((r) => r.match_id) };
+      if (dateMode === "pick") body.entry_date = pickDate;
+      const res = await api("/finance-ho/rekon/results/transfer", { method: "POST", body: JSON.stringify(body) });
       setMsg({ type: "ok", text: res.message, details: (res.results || []).filter((x) => !x.ok).map((x) => `#${x.match_id}: ${x.message}`) });
       setSel(new Set());
     } catch (e) {
       setMsg({ type: "error", text: e.message });
     } finally {
       setBusy(false);
+      setAsk(false);
       load();
     }
   };
@@ -94,6 +110,36 @@ export default function HasilRekon({ onGoto, initialDate, initialOutlet }) {
   return (
     <div className="space-y-4">
       {journalId && <DetailJurnalModal open journalId={journalId} onClose={() => setJournalId(null)} onReversed={() => { setJournalId(null); load(); }} />}
+      {ask && createPortal(
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/30 p-4" onMouseDown={(e) => e.target === e.currentTarget && !busy && setAsk(false)}>
+          <div role="dialog" aria-label="Transfer ke General Ledger" className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+              <p className="text-sm font-extrabold text-slate-800">Transfer ke General Ledger</p>
+              <button type="button" onClick={() => setAsk(false)} disabled={busy} className="rounded-lg px-2 py-1 text-xs font-bold text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-40">Tutup</button>
+            </div>
+            <div className="space-y-3 p-4 text-xs text-slate-700">
+              <p className="font-semibold">{picked.length} pencocokan dipilih · total Rp {rupiah(picked.reduce((a, r) => a + (Number(r.bank_total) || 0), 0))}</p>
+              <label className="flex cursor-pointer items-center gap-2 font-semibold">
+                <input type="radio" name="tgl-jurnal" checked={dateMode === "bank"} onChange={() => setDateMode("bank")} className="h-3.5 w-3.5 accent-emerald-600" />
+                Sesuai tanggal mutasi bank
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 font-semibold">
+                <input type="radio" name="tgl-jurnal" checked={dateMode === "pick"} onChange={() => setDateMode("pick")} className="h-3.5 w-3.5 accent-emerald-600" />
+                Pilih tanggal jurnal
+              </label>
+              {dateMode === "pick" && (
+                <input type="date" aria-label="Tanggal jurnal" value={pickDate} max={iso(new Date())} onChange={(e) => setPickDate(e.target.value)} className="ml-5 h-9 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10" />
+              )}
+              <p className="rounded-lg bg-slate-50 p-2.5 text-[11px] text-slate-500">Tanggal ini yang tertulis di Buku Besar. Contoh: transaksi Sabtu atau Minggu yang baru dibukukan hari Senin, pilih tanggal Sabtu/Minggu-nya.</p>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-100 px-4 py-3">
+              <button type="button" onClick={() => setAsk(false)} disabled={busy} className="h-9 rounded-lg px-3 text-xs font-bold text-slate-500 hover:text-slate-800 disabled:opacity-40">Batal</button>
+              <PrimaryButton onClick={transfer} disabled={busy || !picked.length || (dateMode === "pick" && !pickDate)}>{busy ? "Memproses..." : "Transfer"}</PrimaryButton>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
       <HeaderActions>
         <MoreFilters
           count={(outlet ? 1 : 0) + (methods.length ? 1 : 0) + (status ? 1 : 0) + (gl ? 1 : 0) + (periodChanged(period, basePeriod) ? 1 : 0)}
@@ -117,7 +163,7 @@ export default function HasilRekon({ onGoto, initialDate, initialOutlet }) {
           </FieldSelect>
           <PeriodPicker value={period} onChange={setPeriod} maxDate={iso(new Date())} />
         </MoreFilters>
-        <PrimaryButton onClick={transfer} disabled={busy || !picked.length} icon={HiOutlineArrowUpTray}>
+        <PrimaryButton onClick={openTransfer} disabled={busy || !picked.length} icon={HiOutlineArrowUpTray}>
           {busy ? "Memproses..." : picked.length ? `Transfer to GL (${picked.length})` : "Transfer to GL"}
         </PrimaryButton>
         <RefreshButton onClick={load} spinning={loading} />
