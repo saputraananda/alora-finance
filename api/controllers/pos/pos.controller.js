@@ -18,11 +18,11 @@ import { loadStartDates, beforeStart, startMessage } from "../../utils/outletSta
 
 // Peran akun → akun COA bawaan (kode). Bisa diganti lewat tabel mst_account_map.
 export const ROLES = {
-  KAS: { label: "Kas (Tunai)", code: "1-1100" },
-  BANK: { label: "Bank (Transfer Bank)", code: "1-1300" },
+  KAS: { label: "Kas (Tunai)", code: "1-1201" },
+  BANK: { label: "Bank (Transfer Bank)", code: "1-1301" },
   PIUTANG_QRIS: { label: "Piutang QRIS", code: "1-1410" },
   PIUTANG_EDC: { label: "Piutang EDC", code: "1-1420" },
-  PIUTANG_USAHA: { label: "Piutang Usaha (Nota)", code: "1-1400" },
+  PIUTANG_USAHA: { label: "Piutang Usaha (Nota)", code: "1-1401" },
   DEPOSIT_MEMBER: { label: "Deposit Member", code: "2-1200" },
   PENDAPATAN: { label: "Pendapatan Layanan (bawaan)", code: "4-1100" },
   PENDAPATAN_B2B: { label: "Pendapatan B2B / Event", code: "4-1200" },
