@@ -13,6 +13,7 @@ import {
 import { api, getToken } from "../../../lib/api";
 import { currentCutoffKey, cutoffMonthLabel, cutoffRangeLabel, recentCutoffKeys } from "../../../lib/cutoff";
 import ConfirmModal from "../../../components/ui/ConfirmModal";
+import { FieldSelect, HeaderActions, RefreshButton } from "../../../components/ui/PageHeader";
 
 const cn = (...c) => c.filter(Boolean).join(" ");
 const rp = (n) => new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 }).format(Number(n) || 0);
@@ -178,19 +179,17 @@ export default function BankRekon() {
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
-        <label className="flex items-center gap-1.5">Rekening:
-          <select value={bankId} onChange={(e) => setBankId(e.target.value)} className={inputCls}>
-            {(data?.banks || []).map((b) => <option key={b.id} value={b.id}>{b.outlet_name} · {b.bank_name} {b.account_no}</option>)}
-          </select>
-        </label>
-        <label className="flex items-center gap-1.5">Periode:
-          <select value={month} onChange={(e) => setMonth(e.target.value)} className={inputCls} title={cutoffRangeLabel(month)}>
-            {recentCutoffKeys(18).map((k) => <option key={k} value={k}>{cutoffMonthLabel(k)}</option>)}
-          </select>
-        </label>
+      <HeaderActions>
+        <FieldSelect label="Rekening" value={bankId} onChange={setBankId}>
+          {(data?.banks || []).map((b) => <option key={b.id} value={b.id}>{b.outlet_name} · {b.bank_name} {b.account_no}</option>)}
+        </FieldSelect>
+        {/* Aktivitas Bank memang per bulan cutoff, jadi Periode tetap pilihan bulan */}
+        <FieldSelect label="Periode" value={month} onChange={setMonth} title={cutoffRangeLabel(month)}>
+          {recentCutoffKeys(18).map((k) => <option key={k} value={k}>{cutoffMonthLabel(k)}</option>)}
+        </FieldSelect>
         <span className="text-[11px] font-medium text-slate-400">{cutoffRangeLabel(month)}</span>
-      </div>
+        <RefreshButton onClick={load} spinning={loading} />
+      </HeaderActions>
 
       {data && !data.banks.length && (
         <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
@@ -214,7 +213,7 @@ export default function BankRekon() {
           {/* Ringkasan saldo */}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Saldo rekening koran</p>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Saldo akhir bulan sebelumnya</p>
               <p className="mt-1 text-xl font-extrabold text-slate-800">{s.statement_balance == null ? "-" : rp(s.statement_balance)}</p>
               <div className="mt-2 flex items-center gap-1.5">
                 <input type="number" value={balanceInput} onChange={(e) => setBalanceInput(e.target.value)} placeholder={s.statement_balance_source === "FILE" ? "dari file (isi untuk menimpa)" : "isi saldo akhir periode"} className={cn(inputCls, "w-full")} />
@@ -328,7 +327,7 @@ export default function BankRekon() {
       <ConfirmModal
         open={Boolean(toDelete)}
         onClose={() => setToDelete(null)}
-        title="Hapus mutasi?"
+        title="Hapus mutasi? Pencocokannya ikut dibatalkan"
         desc={toDelete ? `${dm(toDelete.date)} · ${toDelete.description} · Rp ${signed(toDelete.amount)}` : ""}
         onConfirm={() => {
           const r = toDelete;
