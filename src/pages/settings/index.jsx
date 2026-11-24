@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import ConfirmModal from "../../components/ui/ConfirmModal";
 import SaldoAwal from "./components/SaldoAwal";
 import KategoriPayment from "./components/KategoriPayment";
@@ -72,6 +72,7 @@ const Field = ({ label, hint, children }) => (
 
 export default function Pengaturan() {
   // Bagian dipilih dari anak menu "Pengaturan Umum" di sidebar: /finance-ho/pengaturan/<slug>
+  const navigate = useNavigate();
   const slug = useParams()["*"]?.split("/")[0] || "";
   const cur = SETTINGS_SECTIONS.find((s) => s.slug === slug) || SETTINGS_SECTIONS[0];
   const tab = cur.id;
@@ -148,6 +149,27 @@ export default function Pengaturan() {
         <div ref={setSlot} className="contents" />
       </PageHeader>
 
+      {/* Daftar bagian di sisi kiri (gaya sama dengan daftar laporan di Laporan Keuangan) */}
+      <div className="grid gap-5 lg:grid-cols-[220px_1fr]">
+        <nav aria-label="Bagian Pengaturan" className="space-y-1 self-start">
+          {SETTINGS_SECTIONS.map((s) => {
+            const on = s.id === tab;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                aria-current={on ? "page" : undefined}
+                onClick={() => !on && navigate(s.to)}
+                className={cn("w-full rounded-xl border px-3 py-2.5 text-left transition", on ? "border-emerald-500 bg-emerald-50/60" : "border-slate-200 bg-white hover:border-emerald-300")}
+              >
+                <p className="text-xs font-bold text-slate-800">{s.label}</p>
+                <p className="text-[10px] text-slate-400">{s.desc}</p>
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="min-w-0 space-y-5">
       {msg && (
         <div className={cn("flex items-start gap-2 rounded-xl border p-3 text-xs font-medium", msg.type === "ok" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-rose-200 bg-rose-50 text-rose-700")}>
           {msg.type === "ok" ? <HiOutlineCheckCircle className="mt-0.5 h-4 w-4 shrink-0" /> : <HiOutlineExclamationTriangle className="mt-0.5 h-4 w-4 shrink-0" />}
@@ -350,6 +372,9 @@ export default function Pengaturan() {
           </p>
         </div>
       )}
+
+        </div>
+      </div>
 
       <ConfirmModal
         open={Boolean(confirm)}

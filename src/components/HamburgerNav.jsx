@@ -4,7 +4,7 @@ import { HiOutlineBars3, HiOutlineXMark } from "react-icons/hi2";
 const cn = (...c) => c.filter(Boolean).join(" ");
 
 // Satu kartu: ikon hamburger + nama menu yang sedang dibuka (posisi selalu terbaca).
-// Klik kartu → menu lain muncul berjejer ke samping (kanan) di baris yang sama; pilih satu, lalu menutup sendiri.
+// Klik kartu → menu lain muncul berjejer ke samping (kanan); bila tidak muat, turun ke baris berikutnya. Pilih satu, lalu menutup sendiri.
 //   items: [{ id, label, icon?, hint? }]   value: id aktif   onSelect(id)   label: nama kelompok (untuk aksesibilitas)
 export default function HamburgerNav({ items, value, onSelect, label = "Menu", className }) {
   const [open, setOpen] = useState(false);
@@ -22,9 +22,9 @@ export default function HamburgerNav({ items, value, onSelect, label = "Menu", c
     return () => { document.removeEventListener("mousedown", outside); document.removeEventListener("keydown", esc); };
   }, [open]);
 
-  // Menu lain tampil dari sisi kartu; bila banyak, deretan bisa digeser
+  // Menu lain tampil dari sisi kartu; bila banyak, deretan turun ke baris berikutnya (tidak terpotong)
   return (
-    <nav ref={ref} aria-label={label} className={cn("flex min-w-0 items-center gap-2", className)}>
+    <nav ref={ref} aria-label={label} className={cn("flex min-w-0 items-start gap-2", className)}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -43,7 +43,7 @@ export default function HamburgerNav({ items, value, onSelect, label = "Menu", c
       </button>
 
       {open && others.length > 0 && (
-        <div role="menu" className="flex min-w-0 flex-1 animate-[navIn_.18s_ease-out] items-center gap-1 overflow-x-auto py-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div role="menu" className="flex min-w-0 flex-1 animate-[navIn_.18s_ease-out] flex-wrap items-center gap-1 py-0.5">
           {others.map((it) => {
             const Icon = it.icon;
             return (
