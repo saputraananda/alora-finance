@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 import { pool, mainPool, getOutlets } from "../../db/pool.js";
 import { toFixed2 } from "../../utils/currencyHelpers.js";
 import { LIVE_POSTED, monthlyOf, assetPayload } from "./assets.controller.js";
+import { alfiPhotoUrl } from "./assetImport.controller.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // DAFTAR ASET = Manajemen Aset SuperApp (hanya baca). Alfi hanya menambah data penyusutan per kode aset.
@@ -32,7 +33,43 @@ async function categoryByCode(codes) {
   return new Map(rows.map((r) => [r.kode_aset, { id: r.id, name: r.name }]));
 }
 
+// Foto alfi (mst_asset_photo) untuk daftar kode: Map(kode → [{id, file_name, caption}]) urut unggahan
+async function alfiPhotosByCode(codes) {
+  if (!codes.length) return new Map();
+  const [rows] = await pool.query("SELECT id, kode_aset, file_name, caption FROM mst_asset_photo WHERE kode_aset IN (?) ORDER BY id", [codes]);
+  const m = new Map();
+  for (const r of rows) { if (!m.has(r.kode_aset)) m.set(r.kode_aset, []); m.get(r.kode_aset).push(r); }
+  return m;
+}
+
+// Urutan daftar: outlet (Pusat/NULL terakhir), lalu kode — sama dengan urutan lama
+const cmpAsset = (a, b) => {
+  const an = a.outlet_id === null ? 1 : 0; const bn = b.outlet_id === null ? 1 : 0;
+  if (an !== bn) return an - bn;
+  if (a.outlet_id !== b.outlet_id) return (a.outlet_id ?? 0) - (b.outlet_id ?? 0);
+  const x = String(a.code).toLowerCase(); const y = String(b.code).toLowerCase();
+  return x < y ? -1 : x > y ? 1 : 0;
+};
+
+// Data penyusutan satu kode aset (untuk detail)
+async function financeDetail(code) {
+  const [r] = await pool.query(
+    `SELECT a.*, DATE_FORMAT(a.acquisition_date,'%Y-%m-%d') AS acq, a.opening_accum + COALESCE(SUM(CASE WHEN ${LIVE_POSTED} THEN d.amount END), 0) AS accum,
+            COUNT(CASE WHEN ${LIVE_POSTED} THEN 1 END) AS months_done
+     FROM mst_asset a LEFT JOIN tr_depreciation d ON d.asset_id = a.id LEFT JOIN tr_journal_entries je ON je.id = d.journal_id WHERE a.code = ? GROUP BY a.id`,
+    [code]
+  );
+  const f = r[0];
+  if (!f) return null;
+  return {
+    acquisition_date: f.acq, cost: toFixed2(f.cost), salvage: toFixed2(f.salvage), opening_accum: toFixed2(f.opening_accum), life_months: f.life_months,
+    accum: toFixed2(f.accum), book_value: toFixed2(Number(f.cost) - Number(f.accum)), monthly: monthlyOf(f), months_done: Number(f.months_done),
+    status: f.status, disposed_at: f.disposed_at ? String(f.disposed_at).slice(0, 10) : null, locked: Number(f.months_done) > 0,
+  };
+}
+
 // ── GET /assets?search=&sub_kategori=&outlet_id=&kondisi=&page=&limit= ──────────
+// Gabungan aset SuperApp (mst_aset) + aset khusus alfi (mst_asset source='EXCEL'), diurutkan & dipaginasi di memori.
 export async function getAssets(req, res) {
   try {
     const { search = "", category_id = "", outlet_id = "", kondisi = "" } = req.query;
@@ -40,9 +77,10 @@ export async function getAssets(req, res) {
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 24));
     let where = "a.is_deleted = 0 AND a.is_active = 1";
     const params = [];
-    if (search.trim()) {
+    const term = search.trim();
+    if (term) {
       where += " AND (a.kode_aset LIKE ? OR a.nama_aset LIKE ? OR a.brand LIKE ? OR a.no_seri LIKE ?)";
-      const t = `%${search.trim()}%`;
+      const t = `%${term}%`;
       params.push(t, t, t, t);
     }
     if (category_id) {
@@ -58,23 +96,63 @@ export async function getAssets(req, res) {
     if (kondisi) { where += " AND a.kondisi = ?"; params.push(kondisi); }
     if (outlet_id === "none") where += " AND a.outlet_id IS NULL";
     else if (outlet_id) { where += " AND a.outlet_id = ?"; params.push(Number(outlet_id)); }
-    const [[{ total }]] = await mainPool.query(`SELECT COUNT(*) AS total FROM mst_aset a WHERE ${where}`, params);
-    const [rows] = await mainPool.query(
-      `SELECT a.id, a.kode_aset, a.nama_aset, a.sub_kategori, a.brand, a.model, a.no_seri, a.jumlah, a.satuan, a.kondisi, a.outlet_id, a.lokasi_nama,
-              (SELECT photo_path FROM tr_aset_photos ph WHERE ph.aset_id = a.id ORDER BY ph.created_at LIMIT 1) AS photo
-       FROM mst_aset a WHERE ${where} ORDER BY a.outlet_id IS NULL, a.outlet_id, a.kode_aset LIMIT ? OFFSET ?`,
-      [...params, limit, (page - 1) * limit]
-    );
-    const [outlets, fin, cats, [catList]] = await Promise.all([getOutlets(), financeByCode(rows.map((r) => r.kode_aset)), categoryByCode(rows.map((r) => r.kode_aset)), pool.query("SELECT id, name FROM mst_asset_category WHERE is_active = 1 ORDER BY sort_order, name")]);
+
+    // Aset khusus alfi: tidak punya kondisi → tersingkir bila filter kondisi dipakai
+    let alfiOnly = [];
+    if (!kondisi) {
+      const [rows] = await pool.query("SELECT id, code, name, brand, qty, outlet_id FROM mst_asset WHERE source = 'EXCEL'");
+      const cats = await categoryByCode(rows.map((r) => r.code));
+      const lc = term.toLowerCase();
+      alfiOnly = rows.filter((r) => {
+        if (lc && !`${r.code} ${r.name} ${r.brand || ""}`.toLowerCase().includes(lc)) return false;
+        if (category_id === "none") { if (cats.has(r.code)) return false; }
+        else if (category_id && cats.get(r.code)?.id !== Number(category_id)) return false;
+        if (outlet_id === "none") return r.outlet_id === null;
+        if (outlet_id && Number(r.outlet_id) !== Number(outlet_id)) return false;
+        return true;
+      }).map((r) => ({ ...r, outlet_id: r.outlet_id === null ? null : Number(r.outlet_id), cat: cats.get(r.code) || null }));
+    }
+    const [supKeys] = await mainPool.query(`SELECT a.id, a.kode_aset, a.outlet_id FROM mst_aset a WHERE ${where}`, params);
+    const merged = [
+      ...supKeys.map((r) => ({ t: "s", id: r.id, code: r.kode_aset, outlet_id: r.outlet_id === null ? null : Number(r.outlet_id) })),
+      ...alfiOnly.map((r) => ({ t: "x", id: r.id, code: r.code, outlet_id: r.outlet_id, row: r })),
+    ].sort(cmpAsset);
+    const total = merged.length;
+    const slice = merged.slice((page - 1) * limit, page * limit);
+
+    const supIds = slice.filter((m) => m.t === "s").map((m) => m.id);
+    const [supRows] = supIds.length
+      ? await mainPool.query(
+        `SELECT a.id, a.kode_aset, a.nama_aset, a.sub_kategori, a.brand, a.model, a.no_seri, a.jumlah, a.satuan, a.kondisi, a.outlet_id, a.lokasi_nama,
+                (SELECT photo_path FROM tr_aset_photos ph WHERE ph.aset_id = a.id ORDER BY ph.created_at LIMIT 1) AS photo
+         FROM mst_aset a WHERE a.id IN (?)`, [supIds])
+      : [[]];
+    const supById = new Map(supRows.map((r) => [r.id, r]));
+    const codes = slice.map((m) => m.code);
+    const [outlets, fin, cats, alfiPhotos, [catList]] = await Promise.all([getOutlets(), financeByCode(codes), categoryByCode(codes), alfiPhotosByCode(codes), pool.query("SELECT id, name FROM mst_asset_category WHERE is_active = 1 ORDER BY sort_order, name")]);
     const nameOf = new Map(outlets.map((o) => [Number(o.id), o.name]));
-    return res.json({
-      data: rows.map((r) => ({
+    const coverAlfi = (code) => alfiPhotoUrl(alfiPhotos.get(code)?.[0]?.file_name);
+    const data = slice.map((m) => {
+      if (m.t === "x") {
+        const r = m.row;
+        return {
+          id: `x${r.id}`, code: r.code, name: r.name, category: r.cat?.name || null, category_id: r.cat?.id || null, brand: r.brand, model: null, serial: null,
+          qty: Number(r.qty), unit: "unit", condition: null, outlet_id: r.outlet_id,
+          outlet_name: r.outlet_id ? nameOf.get(r.outlet_id) || `Outlet #${r.outlet_id}` : "Pusat",
+          photo: coverAlfi(r.code), finance: fin.get(r.code) || null, source: "EXCEL",
+        };
+      }
+      const r = supById.get(m.id);
+      if (!r) return null;
+      return {
         id: r.id, code: r.kode_aset, name: r.nama_aset, category: cats.get(r.kode_aset)?.name || null, category_id: cats.get(r.kode_aset)?.id || null, brand: r.brand, model: r.model, serial: r.no_seri,
         qty: r.jumlah, unit: r.satuan, condition: r.kondisi, outlet_id: r.outlet_id,
         outlet_name: r.outlet_id ? nameOf.get(Number(r.outlet_id)) || `Outlet #${r.outlet_id}` : r.lokasi_nama || "Pusat",
-        photo: photoUrl(r.photo), finance: fin.get(r.kode_aset) || null,
-      })),
-      total, page, limit, pages: Math.max(1, Math.ceil(total / limit)),
+        photo: photoUrl(r.photo) || coverAlfi(r.kode_aset), finance: fin.get(r.kode_aset) || null,
+      };
+    }).filter(Boolean);
+    return res.json({
+      data, total, page, limit, pages: Math.max(1, Math.ceil(total / limit)),
       meta: { outlets: outlets.map((o) => ({ id: o.id, name: o.name })), categories: catList, conditions: KONDISI },
     });
   } catch (err) {
@@ -84,15 +162,31 @@ export async function getAssets(req, res) {
 }
 
 // ── GET /assets/:id/detail — detail + foto + riwayat maintenance + data penyusutan ──────
+// id "x<n>" = aset khusus alfi (hasil import Excel); selain itu id aset SuperApp.
 export async function getAssetDetail(req, res) {
   try {
+    const rawId = String(req.params.id || "");
+    const alfiPhotoItem = (p) => ({ id: p.id, url: alfiPhotoUrl(p.file_name), caption: p.caption, source: "alfi", deletable: true });
+    if (/^x\d+$/.test(rawId)) {
+      const [[x]] = await pool.query("SELECT * FROM mst_asset WHERE id = ? AND source = 'EXCEL'", [Number(rawId.slice(1))]).then(([r]) => [r.length ? r : [null]]);
+      if (!x) return res.status(404).json({ message: "Aset tidak ditemukan." });
+      const [outlets, myCat, ph, finance] = await Promise.all([getOutlets(), categoryByCode([x.code]), alfiPhotosByCode([x.code]), financeDetail(x.code)]);
+      const outlet = outlets.find((o) => Number(o.id) === Number(x.outlet_id));
+      return res.json({
+        asset: {
+          id: rawId, code: x.code, name: x.name, category: myCat.get(x.code)?.name || null, category_id: myCat.get(x.code)?.id || null, brand: x.brand, model: null, serial: null,
+          qty: Number(x.qty), unit: "unit", condition: null, company: null, pic: null, location: null, outlet_id: x.outlet_id, outlet_name: outlet?.name || (x.outlet_id ? null : "Pusat"),
+          photos: (ph.get(x.code) || []).map(alfiPhotoItem), maintenance: [], maintenance_total: toFixed2(0), finance, source: "EXCEL",
+        },
+      });
+    }
     const [[a]] = await mainPool.query(
       `SELECT a.*, c.company_name, e.full_name AS pic_name FROM mst_aset a LEFT JOIN mst_company c ON c.company_id = a.company_id LEFT JOIN mst_employee e ON e.employee_id = a.pic_employee_id
        WHERE a.id = ? AND a.is_deleted = 0`,
-      [req.params.id]
+      [rawId]
     ).then(([r]) => [r]);
     if (!a) return res.status(404).json({ message: "Aset tidak ditemukan." });
-    const [[photos], [maint], outlets] = await Promise.all([
+    const [[photos], [maint], outlets, alfiPh, finance] = await Promise.all([
       mainPool.query(`SELECT id, photo_path, caption FROM tr_aset_photos WHERE aset_id = ? ORDER BY created_at`, [a.id]),
       mainPool.query(
         `SELECT m.id, m.tipe, m.deskripsi, DATE_FORMAT(m.tanggal_mulai,'%Y-%m-%d') AS start, DATE_FORMAT(m.tanggal_selesai,'%Y-%m-%d') AS finish, m.biaya, m.vendor, m.status, m.catatan, e.full_name AS by_name
@@ -100,27 +194,22 @@ export async function getAssetDetail(req, res) {
         [a.id]
       ),
       getOutlets(),
+      alfiPhotosByCode([a.kode_aset]),
+      financeDetail(a.kode_aset),
     ]);
-    const [[f]] = await pool.query(
-      `SELECT a.*, DATE_FORMAT(a.acquisition_date,'%Y-%m-%d') AS acq, a.opening_accum + COALESCE(SUM(CASE WHEN ${LIVE_POSTED} THEN d.amount END), 0) AS accum,
-              COUNT(CASE WHEN ${LIVE_POSTED} THEN 1 END) AS months_done
-       FROM mst_asset a LEFT JOIN tr_depreciation d ON d.asset_id = a.id LEFT JOIN tr_journal_entries je ON je.id = d.journal_id WHERE a.code = ? GROUP BY a.id`,
-      [a.kode_aset]
-    ).then(([r]) => [r.length ? r : [null]]);
     const outlet = outlets.find((o) => Number(o.id) === Number(a.outlet_id));
     const myCat = (await categoryByCode([a.kode_aset])).get(a.kode_aset);
     return res.json({
       asset: {
         id: a.id, code: a.kode_aset, name: a.nama_aset, category: myCat?.name || null, category_id: myCat?.id || null, brand: a.brand, model: a.model, serial: a.no_seri, qty: a.jumlah, unit: a.satuan,
         condition: a.kondisi, company: a.company_name, pic: a.pic_name, location: a.lokasi_nama, outlet_id: a.outlet_id, outlet_name: outlet?.name || null,
-        photos: photos.map((p) => ({ id: p.id, url: photoUrl(p.photo_path), caption: p.caption })),
+        photos: [
+          ...photos.map((p) => ({ id: p.id, url: photoUrl(p.photo_path), caption: p.caption, source: "superapp", deletable: false })),
+          ...(alfiPh.get(a.kode_aset) || []).map(alfiPhotoItem),
+        ],
         maintenance: maint.map((m) => ({ ...m, biaya: toFixed2(m.biaya) })),
         maintenance_total: toFixed2(maint.filter((m) => m.status !== "dibatalkan").reduce((s, m) => s + Number(m.biaya || 0), 0)),
-        finance: f ? {
-          acquisition_date: f.acq, cost: toFixed2(f.cost), salvage: toFixed2(f.salvage), opening_accum: toFixed2(f.opening_accum), life_months: f.life_months,
-          accum: toFixed2(f.accum), book_value: toFixed2(Number(f.cost) - Number(f.accum)), monthly: monthlyOf(f), months_done: Number(f.months_done),
-          status: f.status, disposed_at: f.disposed_at ? String(f.disposed_at).slice(0, 10) : null, locked: Number(f.months_done) > 0,
-        } : null,
+        finance,
       },
     });
   } catch (err) {
@@ -133,7 +222,12 @@ export async function getAssetDetail(req, res) {
 export async function saveAssetFinance(req, res) {
   try {
     const code = String(req.params.kode || "").trim();
-    const [[a]] = await mainPool.query(`SELECT kode_aset, nama_aset, sub_kategori, outlet_id FROM mst_aset WHERE kode_aset = ? AND is_deleted = 0`, [code]).then(([r]) => [r]);
+    let [[a]] = await mainPool.query(`SELECT kode_aset, nama_aset, sub_kategori, outlet_id FROM mst_aset WHERE kode_aset = ? AND is_deleted = 0`, [code]).then(([r]) => [r]);
+    if (!a) {
+      // Aset khusus alfi (hasil import Excel): nama/kategori/outlet diambil dari data alfi sendiri
+      const [x] = await pool.query("SELECT code, name, category, outlet_id FROM mst_asset WHERE code = ? AND source = 'EXCEL'", [code]);
+      if (x.length) a = { kode_aset: x[0].code, nama_aset: x[0].name, sub_kategori: x[0].category, outlet_id: x[0].outlet_id };
+    }
     if (!a) return res.status(404).json({ message: "Aset tidak ditemukan di Manajemen Aset." });
     const p = assetPayload({ ...req.body, code: a.kode_aset, name: a.nama_aset, category: a.sub_kategori, outlet_id: a.outlet_id });
     if (p.error) return res.status(422).json({ message: p.error });
@@ -274,7 +368,8 @@ export async function setAssetCategory(req, res) {
   try {
     const kode = String(req.params.kode || "");
     const [a] = await mainPool.query("SELECT kode_aset FROM mst_aset WHERE kode_aset = ? AND is_deleted = 0", [kode]);
-    if (!a.length) return res.status(404).json({ message: "Aset tidak ditemukan." });
+    const [x] = a.length ? [[]] : await pool.query("SELECT id FROM mst_asset WHERE code = ? AND source = 'EXCEL'", [kode]);
+    if (!a.length && !x.length) return res.status(404).json({ message: "Aset tidak ditemukan." });
     const cid = req.body.category_id;
     if (cid === null || cid === "" || cid === undefined) {
       await pool.query("DELETE FROM mst_asset_category_map WHERE kode_aset = ?", [kode]);

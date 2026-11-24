@@ -9,13 +9,17 @@ import {
   HiOutlineExclamationTriangle,
   HiOutlinePhoto,
   HiOutlineSquares2X2,
+  HiOutlineArrowUpTray,
+  HiOutlineCamera,
+  HiOutlineTrash,
   HiOutlineListBullet,
   HiOutlineWrenchScrewdriver,
   HiOutlineXMark,
 } from "react-icons/hi2";
-import { api, apiFileUrl } from "../../lib/api";
+import { api, apiFileUrl, getToken } from "../../lib/api";
+import ImportAsetDialog from "./ImportAsetDialog";
 import { currentCutoffKey, cutoffMonthLabel, cutoffRangeLabel, recentCutoffKeys, todayWib } from "../../lib/cutoff";
-import PageHeader, { FieldSelect, RefreshButton, SearchBox } from "../../components/ui/PageHeader";
+import PageHeader, { FieldSelect, PrimaryButton, RefreshButton, SearchBox } from "../../components/ui/PageHeader";
 
 const cn = (...c) => c.filter(Boolean).join(" ");
 const rp = (n) => new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 }).format(Number(n) || 0);
@@ -53,6 +57,7 @@ function Photo({ src, thumb, alt, className }) {
   return <img src={url} alt={alt} loading="lazy" onError={() => setBad(true)} className={cn("object-cover", className)} />;
 }
 
+const ExcelBadge = () => <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold text-slate-500">Dari Excel</span>;
 const NoCat = () => <span className="text-slate-400">Belum dikategorikan</span>;
 
 const emptyFin = { acquisition_date: "", cost: "", salvage: "0", opening_accum: "0", life_months: "60" };
@@ -63,6 +68,9 @@ function DetailModal({ id, categories, onClose, onChanged }) {
   const [shot, setShot] = useState(0);
   const [catBusy, setCatBusy] = useState(false);
   const [catMsg, setCatMsg] = useState(null);
+  const [upBusy, setUpBusy] = useState(false);
+  const [upErr, setUpErr] = useState("");
+  const [delId, setDelId] = useState(null);
   const [fin, setFin] = useState(emptyFin);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
@@ -110,6 +118,43 @@ function DetailModal({ id, categories, onClose, onChanged }) {
     }
   };
 
+  const upload = async (f) => {
+    if (!f) return;
+    setUpBusy(true);
+    setUpErr("");
+    try {
+      const fd = new FormData();
+      fd.append("photo", f);
+      const base = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+      const res = await fetch(`${base}/api/finance-ho/assets/photos/${encodeURIComponent(a.code)}`, { method: "POST", headers: { Authorization: `Bearer ${getToken()}` }, body: fd });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.message || "Gagal mengunggah foto.");
+      await load();
+      setShot(0);
+      onChanged();
+    } catch (e) {
+      setUpErr(e.message);
+    } finally {
+      setUpBusy(false);
+    }
+  };
+
+  const removePhoto = async (pid) => {
+    setUpBusy(true);
+    setUpErr("");
+    try {
+      await api(`/finance-ho/assets/photos/${pid}`, { method: "DELETE" });
+      setDelId(null);
+      setShot(0);
+      await load();
+      onChanged();
+    } catch (e) {
+      setUpErr(e.message);
+    } finally {
+      setUpBusy(false);
+    }
+  };
+
   const locked = a?.finance?.locked;
   const setF = (p) => setFin((f) => ({ ...f, ...p }));
   const info = a ? [["Lokasi", a.outlet_name || a.location || "Pusat"], ["Kondisi", a.condition], ["Merek / model", [a.brand, a.model].filter(Boolean).join(" / ") || "-"], ["No. seri", a.serial || "-"], ["Jumlah", `${a.qty} ${a.unit}`], ["Perusahaan", a.company || "-"], ["PIC", a.pic || "-"]] : [];
@@ -121,7 +166,12 @@ function DetailModal({ id, categories, onClose, onChanged }) {
         <>
           <div className="grid gap-4 md:grid-cols-5">
             <div className="md:col-span-2">
-              <Photo src={a.photos[shot]?.url} alt={a.name} className="aspect-[4/3] w-full rounded-2xl" />
+              {a.photos.length === 0 ? (
+                <div className="flex aspect-[4/3] w-full flex-col items-center justify-center gap-1 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-3 text-center text-slate-400">
+                  <HiOutlinePhoto className="h-8 w-8" />
+                  <p>Belum ada foto. Unggah foto aset ini.</p>
+                </div>
+              ) : <Photo src={a.photos[shot]?.url} alt={a.name} className="aspect-[4/3] w-full rounded-2xl" />}
               {a.photos.length > 1 && (
                 <div className="mt-2 flex gap-1.5 overflow-x-auto">
                   {a.photos.map((p, i) => (
@@ -131,6 +181,23 @@ function DetailModal({ id, categories, onClose, onChanged }) {
                   ))}
                 </div>
               )}
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <label className={cn("inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 font-bold text-slate-600 hover:border-emerald-400 hover:text-emerald-700", upBusy && "pointer-events-none opacity-60")}>
+                  <HiOutlineCamera className="h-4 w-4" /> {upBusy ? "Mengunggah..." : "Tambah foto"}
+                  <input type="file" accept="image/*" capture="environment" disabled={upBusy} className="hidden" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; upload(f); }} />
+                </label>
+                {a.photos[shot]?.deletable && delId !== a.photos[shot].id && (
+                  <button type="button" disabled={upBusy} onClick={() => setDelId(a.photos[shot].id)} className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 font-bold text-rose-600 hover:bg-rose-50 disabled:opacity-50"><HiOutlineTrash className="h-4 w-4" /> Hapus foto</button>
+                )}
+              </div>
+              {delId != null && a.photos[shot]?.id === delId && (
+                <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 p-2.5 font-semibold text-rose-700">
+                  <span className="flex-1">Hapus foto ini?</span>
+                  <button type="button" disabled={upBusy} onClick={() => setDelId(null)} className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-slate-600">Batal</button>
+                  <button type="button" disabled={upBusy} onClick={() => removePhoto(delId)} className="rounded-lg bg-rose-600 px-3 py-1 text-white disabled:opacity-60">{upBusy ? "Menghapus..." : "Ya, hapus"}</button>
+                </div>
+              )}
+              {upErr && <p className="mt-2 text-[11px] font-semibold text-rose-700">{upErr}</p>}
             </div>
             <dl className="grid grid-cols-2 gap-x-4 gap-y-3 md:col-span-3">
               {info.map(([k, v]) => (
@@ -286,6 +353,7 @@ export default function AsetTetap() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [detailId, setDetailId] = useState(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   useEffect(() => { document.title = "Aset Tetap | HO Finance"; }, []);
   useEffect(() => { try { localStorage.setItem("alfi_asset_view", view); } catch { /* abaikan */ } }, [view]);
@@ -337,6 +405,7 @@ export default function AsetTetap() {
           <button type="button" onClick={() => setView("gallery")} title="Galeri" aria-label="Tampilan galeri" aria-pressed={view === "gallery"} className={toggleCls(view === "gallery")}><HiOutlineSquares2X2 className="h-4 w-4" /></button>
           <button type="button" onClick={() => setView("list")} title="Daftar" aria-label="Tampilan daftar" aria-pressed={view === "list"} className={toggleCls(view === "list")}><HiOutlineListBullet className="h-4 w-4" /></button>
         </div>
+        <PrimaryButton icon={HiOutlineArrowUpTray} onClick={() => setImportOpen(true)}>Import Excel</PrimaryButton>
         <RefreshButton onClick={load} spinning={loading} />
       </PageHeader>
 
@@ -353,7 +422,7 @@ export default function AsetTetap() {
             <button key={a.id} type="button" onClick={() => setDetailId(a.id)} className="group overflow-hidden rounded-2xl border border-slate-200 bg-white text-left transition hover:border-emerald-400 hover:shadow-md">
               <Photo src={a.photo} thumb alt={a.name} className="aspect-[4/3] w-full transition duration-300 group-hover:scale-105" />
               <div className="space-y-1 p-3">
-                <p className="truncate font-mono text-[10px] font-bold text-slate-400">{a.code}</p>
+                <p className="flex items-center gap-1.5 truncate font-mono text-[10px] font-bold text-slate-400"><span className="truncate">{a.code}</span>{a.source === "EXCEL" && <ExcelBadge />}</p>
                 <p className="line-clamp-2 min-h-[2rem] text-xs font-bold text-slate-800">{a.name}</p>
                 <p className="truncate text-[11px] text-slate-500">{a.outlet_name}</p>
                 <p className="truncate text-[10px] font-semibold text-slate-500">{a.category || <NoCat />}</p>
@@ -376,7 +445,7 @@ export default function AsetTetap() {
                 {rows.map((a) => (
                   <tr key={a.id} onClick={() => setDetailId(a.id)} className="cursor-pointer hover:bg-slate-50/60">
                     <td className="w-14 px-3 py-2"><Photo src={a.photo} thumb alt="" className="h-9 w-12 rounded-lg" /></td>
-                    <td className="px-3 py-2.5 font-mono font-bold text-slate-800">{a.code}</td>
+                    <td className="px-3 py-2.5 font-mono font-bold text-slate-800">{a.code}{a.source === "EXCEL" && <span className="ml-1.5 font-sans"><ExcelBadge /></span>}</td>
                     <td className="px-3 py-2.5"><p className="font-semibold text-slate-800">{a.name}</p>{(a.brand || a.serial) && <p className="text-[10px] text-slate-400">{[a.brand, a.serial].filter(Boolean).join(" · ")}</p>}</td>
                     <td className="px-3 py-2.5 text-slate-500">{a.category || <NoCat />}</td>
                     <td className="px-3 py-2.5 text-slate-600">{a.outlet_name}</td>
@@ -404,6 +473,7 @@ export default function AsetTetap() {
 
       <Depreciation />
 
+      {importOpen && <ImportAsetDialog onClose={() => setImportOpen(false)} onDone={load} />}
       {detailId && <DetailModal id={detailId} categories={data?.meta.categories || []} onClose={() => setDetailId(null)} onChanged={load} />}
     </div>
   );
