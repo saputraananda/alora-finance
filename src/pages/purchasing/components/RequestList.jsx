@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { HiOutlineChevronLeft, HiOutlineChevronRight, HiOutlineClipboardDocumentList, HiOutlineMagnifyingGlass } from "react-icons/hi2";
+import { HiOutlineChevronLeft, HiOutlineChevronRight, HiOutlineClipboardDocumentList } from "react-icons/hi2";
 import { api } from "../../../lib/api";
-import { STATUS_META, TYPE_LABEL, cn, dmy, filterSelectCls, getStatusDisplay, rp, thCls } from "../utils/format";
+import { STATUS_META, TYPE_LABEL, cn, dmy, getStatusDisplay, rp, thCls } from "../utils/format";
 import DateFilter, { useDateFilter } from "../../../components/DateFilter";
+import PageHeader, { FieldSelect, MoreFilters, RefreshButton, SearchBox } from "../../../components/ui/PageHeader";
 import RequestDetailModal from "./RequestDetailModal";
 
 const REFRESH_MS = 10000; // muat ulang diam-diam (SuperApp: 5 detik)
@@ -11,7 +12,8 @@ const REFRESH_MS = 10000; // muat ulang diam-diam (SuperApp: 5 detik)
 // filter tanggal (Cutoff / Rentang / Satu Hari / Semua), cari, tipe, status, kategori,
 // metode & departemen (tab "semua"), jumlah per halaman 10 / 25 / 100 / ALL.
 // tab: "semua" | "antrean" | "bayar"
-export default function RequestList({ tab, emptyText = "Belum ada pengajuan" }) {
+// headerProps: { icon, tone, title, subtitle } untuk PageHeader; extra: konten (mis. KPI & tab) di bawah kolom cari.
+export default function RequestList({ tab, emptyText = "Belum ada pengajuan", headerProps, extra }) {
   const isAll = tab === "semua";
   // Antrean & Pembayaran: bawaannya Semua periode supaya antrean lama tidak tersembunyi
   const date = useDateFilter(isAll ? "cutoff" : "all");
@@ -93,8 +95,8 @@ export default function RequestList({ tab, emptyText = "Belum ada pengajuan" }) 
   const rows = data?.data || [];
   const total = data?.total || 0;
   const totalPages = Math.max(1, Math.ceil(total / (limit === "all" ? Math.max(total, 1) : limit)));
-  const reset = (setter) => (e) => {
-    setter(e.target.value);
+  const reset = (setter) => (v) => {
+    setter(v);
     setPage(1);
   };
 
@@ -102,47 +104,44 @@ export default function RequestList({ tab, emptyText = "Belum ada pengajuan" }) 
     <div className="space-y-4">
       {openId && <RequestDetailModal id={openId} onClose={() => setOpenId(null)} onChanged={() => load()} />}
 
-      <DateFilter f={date} />
-
-      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-        <div className="relative min-w-[220px] flex-1">
-          <HiOutlineMagnifyingGlass className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <input
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Cari nama barang, kode, atau nama pengaju..."
-            className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-4 text-sm outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/30"
-          />
-        </div>
-        <select value={type} onChange={reset(setType)} className={filterSelectCls}>
+      <PageHeader crumb="Account Payable" {...headerProps} search={<SearchBox value={searchInput} onChange={setSearchInput} placeholder="Cari nama barang, kode, atau nama pengaju..." />}>
+        <FieldSelect value={type} onChange={reset(setType)} title="Tipe">
           <option value="">Semua Tipe</option>
           <option value="pengajuan">Pengajuan</option>
           <option value="reimburse">Reimburse</option>
-        </select>
+        </FieldSelect>
         {isAll && (
-          <select value={status} onChange={reset(setStatus)} className={filterSelectCls}>
+          <FieldSelect value={status} onChange={reset(setStatus)} title="Status">
             <option value="">Semua Status</option>
             {Object.entries(STATUS_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-          </select>
+          </FieldSelect>
         )}
-        <select value={company} onChange={reset(setCompany)} className={filterSelectCls}>
+        <FieldSelect value={company} onChange={reset(setCompany)} title="Kategori">
           <option value="">Semua Kategori</option>
           {companies.map((c) => <option key={c.company_id} value={c.company_id}>{c.company_name}</option>)}
-        </select>
+        </FieldSelect>
         {isAll && (
-          <select value={method} onChange={reset(setMethod)} className={filterSelectCls}>
+          <FieldSelect value={method} onChange={reset(setMethod)} title="Metode">
             <option value="">Semua Metode</option>
             <option value="cash">Cash</option>
             <option value="kredit">Kredit</option>
-          </select>
+          </FieldSelect>
         )}
         {isAll && (
-          <select value={dept} onChange={reset(setDept)} className={filterSelectCls}>
-            <option value="">Semua Departemen</option>
-            {departments.map((d) => <option key={d.department_id} value={d.department_id}>{d.department_name}</option>)}
-          </select>
+          <MoreFilters count={dept ? 1 : 0} onReset={() => reset(setDept)("")}>
+            <FieldSelect label="Departemen" value={dept} onChange={reset(setDept)}>
+              <option value="">Semua Departemen</option>
+              {departments.map((d) => <option key={d.department_id} value={d.department_id}>{d.department_name}</option>)}
+            </FieldSelect>
+          </MoreFilters>
         )}
-      </div>
+        <RefreshButton onClick={() => load()} spinning={loading} />
+      </PageHeader>
+
+
+      {extra}
+
+      <DateFilter f={date} />
 
       {error && <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{error}</p>}
 
