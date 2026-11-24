@@ -25,6 +25,7 @@ import Kredit from './pages/purchasing/Kredit';
 // (tiap tab membawa alamatnya sendiri), sehingga halaman yang tidak aktif tetap hidup di belakang layar.
 const FINANCE_ROUTES = [
   { path: 'dashboard', element: <DashboardFinance /> },
+  { path: 'tab-baru', element: <Home embedded /> }, // isi tab baru (tombol +)
   { path: 'integrasi-pos', element: <PosIntegration /> },
   { path: 'pengaturan/*', element: <Pengaturan /> },
   { path: 'laporan', element: <LaporanKeuangan /> },

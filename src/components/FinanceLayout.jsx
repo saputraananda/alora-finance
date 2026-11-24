@@ -11,6 +11,7 @@ import {
   HiOutlineXMark,
   HiOutlineChevronDown,
   HiOutlineBookOpen,
+  HiOutlinePlus,
   HiOutlineDocumentText,
   HiOutlineNumberedList,
   HiOutlineCalculator,
@@ -213,31 +214,36 @@ function UserMenu() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// TAB HALAMAN — setiap menu yang dibuka menjadi tab (seperti browser).
-// Halaman di tab yang tidak aktif tetap hidup (hanya disembunyikan), jadi filter, isian,
-// dan posisi gulir tidak hilang saat pindah tab. Daftar tab disimpan di localStorage.
+// TAB HALAMAN — seperti tab browser: tiap tab punya riwayat halamannya sendiri.
+// Membuka menu mengganti halaman di tab aktif; tab baru hanya lewat tombol +. Halaman di tab yang
+// tidak aktif tetap hidup (hanya disembunyikan), jadi filter, isian, dan posisi gulir tidak hilang saat
+// pindah tab. Daftar tab dan riwayatnya disimpan di localStorage.
 // ════════════════════════════════════════════════════════════════════════════
 const MAX_TABS = 12;
 const MAX_SHOWN = 5; // jumlah tab yang tampil di bar (sisanya lewat dropdown)
-const PINNED_KEY = "/finance-ho/dashboard";
-const STORE_KEY = "alfi.tabs.v1";
+const MAX_HIST = 30; // banyak halaman yang diingat per tab (untuk tombol Kembali)
+const DEFAULT_PATH = "/finance-ho/dashboard";
+const NEW_TAB_PATH = "/finance-ho/tab-baru"; // isi tab baru = halaman Beranda
+const STORE_KEY = "alfi.tabs.v2";
+const OLD_STORE_KEY = "alfi.tabs.v1";
 const TITLE_OVERRIDE = {};
 
 const isPinned = () => false; // tidak ada tab yang disematkan; posisi paling kiri dipakai tombol Kembali
-const isChild = (key) => key === "jurnal-baru" || key.startsWith("jurnal-ubah:"); // form: dibuka di sebelah halaman asalnya
 
-// Kunci tab: satu halaman = satu tab. Mengembalikan null bila alamat tidak dikenal.
+// Kunci halaman: dipakai untuk judul tab dan untuk memutuskan perlu tidaknya memuat ulang halaman. null = alamat tidak dikenal.
 function keyOf(pathname) {
   const p = pathname.replace(/\/+$/, "");
+  if (p === NEW_TAB_PATH) return "tab-baru";
   if (p === "/finance-ho/jurnal-umum/baru") return "jurnal-baru";
   const m = p.match(/^\/finance-ho\/jurnal-umum\/([^/]+)\/ubah$/);
   if (m) return `jurnal-ubah:${m[1]}`;
-  if (p === SETTINGS_BASE || p.startsWith(`${SETTINGS_BASE}/`)) return SETTINGS_BASE; // semua anak menu Pengaturan Umum = satu tab
+  if (p === SETTINGS_BASE || p.startsWith(`${SETTINGS_BASE}/`)) return SETTINGS_BASE; // semua anak menu Pengaturan Umum = satu halaman
   const item = ALL_MENU_ITEMS.find((i) => i.to === p);
   return item ? item.to : null;
 }
 
 function infoOf(key, pathname = "") {
+  if (key === "tab-baru") return { title: "Tab baru", icon: HiOutlinePlus };
   if (key === "jurnal-baru") return { title: "Jurnal baru", icon: HiOutlineBookOpen };
   if (key.startsWith("jurnal-ubah:")) return { title: "Ubah jurnal", icon: HiOutlineBookOpen };
   if (key === SETTINGS_BASE) {
@@ -252,47 +258,78 @@ function infoOf(key, pathname = "") {
   return { title, icon: item.icon };
 }
 
-function loadStoredTabs(initialKey, initialPath) {
-  let stored = [];
+// ── Model tab ───────────────────────────────────────────────────────────────
+// Satu tab = satu "jendela" dengan riwayat halamannya sendiri (seperti browser):
+//   { id, hist: [{pathname, search, state}], idx, rev }   halaman tab sekarang = hist[idx]
+// Membuka menu mengganti halaman di tab aktif; tab baru hanya dibuat lewat tombol +.
+let idSeq = 0;
+const newId = () => `t${Date.now().toString(36)}${(idSeq++).toString(36)}`;
+const curOf = (t) => t.hist[t.idx];
+const mkTab = (pathname, search = "", state = null) => ({ id: newId(), hist: [{ pathname, search: search || "", state }], idx: 0, rev: 0 });
+const validEntry = (e) => typeof e?.pathname === "string" && e.pathname.startsWith("/finance-ho/") && Boolean(keyOf(e.pathname));
+const fixOld = (e) => (String(e.pathname).replace(/\/+$/, "") === SETTINGS_BASE ? { ...e, pathname: settingsPath(new URLSearchParams(e.search || "").get("tab") || "cabang"), search: "" } : e);
+
+// Tab tersimpan (v2); bila belum ada, ubah dari format lama (satu halaman = satu tab). Lalu sesuaikan dengan alamat yang sedang dibuka.
+function loadStored(initial) {
+  let tabs = [];
+  let active = null;
   try {
     const raw = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
-    if (Array.isArray(raw?.tabs)) stored = raw.tabs;
-  } catch {
-    stored = [];
-  }
-  const out = [];
-  const seen = new Set();
-  const add = (key, pathname, search) => {
-    if (!key || seen.has(key)) return;
-    seen.add(key);
-    out.push({ key, pathname, search: search || "", state: null, rev: 0, opener: null });
-  };
-  stored.forEach((t) => {
-    if (t?.key === SETTINGS_BASE && String(t.pathname).replace(/\/+$/, "") === SETTINGS_BASE) {
-      t = { ...t, pathname: settingsPath(new URLSearchParams(t.search || "").get("tab") || "cabang"), search: "" };
+    if (Array.isArray(raw?.tabs)) {
+      tabs = raw.tabs
+        .map((t) => {
+          const hist = (Array.isArray(t?.hist) ? t.hist : []).map(fixOld).filter(validEntry).slice(-MAX_HIST);
+          if (!hist.length) return null;
+          const idx = Math.min(Math.max(0, Number(t.idx) || 0), hist.length - 1);
+          return { id: String(t.id || newId()), hist: hist.map((e) => ({ pathname: e.pathname, search: e.search || "", state: null })), idx, rev: 0 };
+        })
+        .filter(Boolean);
+      active = raw.active;
+    } else {
+      const old = JSON.parse(localStorage.getItem(OLD_STORE_KEY) || "null");
+      if (Array.isArray(old?.tabs)) tabs = old.tabs.map(fixOld).filter(validEntry).map((t) => mkTab(t.pathname, t.search || ""));
     }
-    if (typeof t?.pathname === "string" && t.pathname.startsWith("/finance-ho/") && keyOf(t.pathname, t.search || "") === t.key) add(t.key, t.pathname, t.search);
-  });
-  if (initialKey) add(initialKey, initialPath.pathname, initialPath.search);
-  return out.slice(0, MAX_TABS);
+  } catch {
+    tabs = [];
+  }
+  tabs = tabs.slice(0, MAX_TABS);
+  const urlOk = Boolean(keyOf(initial.pathname));
+  const sameEntry = (e) => e.pathname === initial.pathname && (e.search || "") === (initial.search || "");
+  if (!tabs.length) {
+    const t = mkTab(urlOk ? initial.pathname : DEFAULT_PATH, urlOk ? initial.search : "");
+    return { tabs: [t], active: t.id };
+  }
+  const act = tabs.find((t) => t.id === active) || tabs[0];
+  if (!urlOk || sameEntry(curOf(act))) return { tabs, active: act.id };
+  // Alamat berbeda dari tab aktif tersimpan (mis. tautan dibuka dari luar): tampilkan di tab yang sudah menunjukkannya, atau buka tab baru
+  const found = tabs.find((t) => sameEntry(curOf(t)));
+  if (found) return { tabs, active: found.id };
+  if (tabs.length < MAX_TABS) {
+    const nt = mkTab(initial.pathname, initial.search);
+    return { tabs: [...tabs, nt], active: nt.id };
+  }
+  const hist = [...act.hist.slice(0, act.idx + 1), { pathname: initial.pathname, search: initial.search || "", state: null }].slice(-MAX_HIST);
+  return { tabs: tabs.map((t) => (t.id === act.id ? { ...t, hist, idx: hist.length - 1 } : t)), active: act.id };
 }
 
-// Merender satu halaman pada alamat tab itu sendiri (bukan alamat browser).
+// Merender halaman tab pada alamat tab itu sendiri (bukan alamat browser).
 function TabView({ routes, tab, setDirty, closeTab }) {
+  const cur = curOf(tab);
+  const pageKey = keyOf(cur.pathname) || cur.pathname;
   const location = useMemo(
-    () => ({ pathname: tab.pathname, search: tab.search, hash: "", state: tab.state, key: `${tab.key}#${tab.rev}` }),
-    [tab.pathname, tab.search, tab.state, tab.rev, tab.key]
+    () => ({ pathname: cur.pathname, search: cur.search, hash: "", state: cur.state, key: `${pageKey}#${tab.rev}` }),
+    [cur.pathname, cur.search, cur.state, pageKey, tab.rev]
   );
   const element = useRoutes(routes, location);
-  const ctx = useMemo(() => ({ key: tab.key, setDirty, closeTab }), [tab.key, setDirty, closeTab]);
+  const ctx = useMemo(() => ({ key: tab.id, setDirty, closeTab }), [tab.id, setDirty, closeTab]);
   return (
     <TabsContext.Provider value={ctx}>
-      <ErrorBoundary key={`${tab.key}#${tab.rev}`}>{element}</ErrorBoundary>
+      <ErrorBoundary key={`${pageKey}#${tab.rev}`}>{element}</ErrorBoundary>
     </TabsContext.Provider>
   );
 }
 
-function TabBar({ tabs, activeKey, dirty, onActivate, onClose, onCloseMany, onReorder, canGoBack, onBack, onHome, trailing }) {
+function TabBar({ tabs, activeKey, dirty, onActivate, onClose, onCloseMany, onReorder, onNew, canGoBack, backTitle, onBack, onHome, trailing }) {
   const stripRef = useRef(null);
   const [ctx, setCtx] = useState(null); // {x, y, key}
   const [list, setList] = useState(null); // {x, y}
@@ -335,7 +372,7 @@ function TabBar({ tabs, activeKey, dirty, onActivate, onClose, onCloseMany, onRe
       <button
         type="button"
         onClick={onBack}
-        title={canGoBack ? "Kembali satu langkah" : "Kembali ke Beranda"}
+        title={backTitle}
         aria-label="Kembali"
         className="mb-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-emerald-100/80 transition hover:bg-white/10 hover:text-white"
       >
@@ -344,7 +381,7 @@ function TabBar({ tabs, activeKey, dirty, onActivate, onClose, onCloseMany, onRe
       <div className="mx-1 mb-3 h-4 w-px shrink-0 bg-white/20" />
       <div ref={stripRef} className="mr-8 flex min-w-0 flex-1 gap-0.5 overflow-hidden">
         {shown.map((t) => {
-          const { title, icon: Icon } = infoOf(t.key, t.pathname);
+          const { title, icon: Icon } = infoOf(t.pageKey, t.pathname);
           const active = t.key === activeKey;
           const pinned = isPinned(t.key);
           return (
@@ -389,10 +426,22 @@ function TabBar({ tabs, activeKey, dirty, onActivate, onClose, onCloseMany, onRe
               )}
             </div>
           );
-        })}    <button
+        })}
+        {/* Tombol + dan daftar tab menempel di sebelah tab terakhir; sisi kanan bar hanya untuk nama dan divisi */}
+        <button
+          type="button"
+          onClick={onNew}
+          disabled={tabs.length >= MAX_TABS}
+          title="Tab baru (Alt+T)"
+          aria-label="Tab baru"
+          className="mb-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-emerald-100/80 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <HiOutlinePlus className="h-4 w-4" />
+        </button>
+        <button
           type="button"
           onMouseDown={stop}
-          onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setCtx(null); setList(list ? null : { x: r.right, y: r.bottom + 4 }); }}
+          onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setCtx(null); setList(list ? null : { x: r.left, y: r.bottom + 4 }); }}
           className="mb-1 flex h-8 shrink-0 items-center gap-1 rounded-lg px-2 text-[11px] font-bold text-emerald-100/70 hover:bg-white/10"
           title="Semua halaman yang terbuka"
         >
@@ -417,9 +466,9 @@ function TabBar({ tabs, activeKey, dirty, onActivate, onClose, onCloseMany, onRe
         </div>
       )}
       {list && (
-        <div onMouseDown={stop} style={{ left: Math.max(8, list.x - 260), top: list.y }} className="fixed z-[60] max-h-[60vh] w-64 overflow-auto rounded-xl border border-slate-200 bg-white p-1 text-xs shadow-xl">
+        <div onMouseDown={stop} style={{ left: Math.max(8, Math.min(list.x, window.innerWidth - 272)), top: list.y }} className="fixed z-[60] max-h-[60vh] w-64 overflow-auto rounded-xl border border-slate-200 bg-white p-1 text-xs shadow-xl">
           {tabs.map((t) => {
-            const { title, icon: Icon } = infoOf(t.key, t.pathname);
+            const { title, icon: Icon } = infoOf(t.pageKey, t.pathname);
             return (
               <button key={t.key} type="button" onClick={() => { setList(null); onActivate(t.key); }} className={cn("flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-slate-100", t.key === activeKey ? "font-bold text-emerald-700" : "font-semibold text-slate-700")}>
                 <Icon className="h-4 w-4 shrink-0" />
@@ -439,26 +488,54 @@ export default function FinanceLayout({ routes }) {
   const { pathname } = location;
   const navigate = useNavigate();
 
-  // ── Tab ────────────────────────────────────────────────────────────────
-  const initialKey = keyOf(pathname, location.search);
-  const [tabs, setTabs] = useState(() => loadStoredTabs(initialKey, location));
-  const [activeKey, setActiveKey] = useState(initialKey || PINNED_KEY);
-  const [mounted, setMounted] = useState(() => new Set([initialKey || PINNED_KEY])); // halaman baru dimuat saat pertama dibuka
+  // ── Tab: tiap tab punya riwayat halamannya sendiri (seperti browser) ─────────────────────────────────
+  const [boot] = useState(() => loadStored({ pathname: location.pathname, search: location.search }));
+  const [tabs, setTabs] = useState(boot.tabs);
+  const [activeId, setActiveId] = useState(boot.active);
+  const [mounted, setMounted] = useState(() => new Set([boot.active])); // halaman tab dimuat saat tab pertama kali aktif
   const [dirty, setDirtyMap] = useState({});
-  const [confirm, setConfirm] = useState(null); // {keys, focusKey}
+  const [confirm, setConfirm] = useState(null); // tutup tab: {keys, focusKey}
+  const [pending, setPending] = useState(null); // pindah halaman saat isian belum disimpan: {run}
   const [notice, setNotice] = useState("");
+  const [trail, setTrail] = useState([]); // tab-tab yang pernah aktif sebelumnya (terbaru di belakang), untuk Kembali di halaman pertama tab
   const tabsRef = useRef(tabs);
-  const activeRef = useRef(activeKey);
+  const activeRef = useRef(activeId);
   const dirtyRef = useRef(dirty);
   const navRef = useRef(navigate);
+  const locRef = useRef(location);
+  const expectedRef = useRef(null); // alamat yang baru kita setel sendiri (supaya tidak dianggap navigasi baru)
   tabsRef.current = tabs;
-  activeRef.current = activeKey;
+  activeRef.current = activeId;
   dirtyRef.current = dirty;
   navRef.current = navigate;
+  locRef.current = location;
 
-  // Alamat browser berubah (klik menu, tautan, navigate) → buka / fokus tab yang sesuai.
+  // Samakan alamat browser dengan halaman tab (tanpa menambah riwayat browser)
+  const mirror = useCallback((entry) => {
+    const target = entry.pathname + (entry.search || "");
+    if (target === locRef.current.pathname + locRef.current.search) return;
+    expectedRef.current = target;
+    navRef.current(target, { replace: true, state: entry.state || null });
+  }, []);
+
+  // Pindah ke halaman baru di tab: tambahkan ke riwayat tab (atau gantikan entri sekarang)
+  const applyNav = useCallback((id, entry, replace = false) => {
+    setTabs((cur) =>
+      cur.map((t) => {
+        if (t.id !== id) return t;
+        const here = curOf(t);
+        const sameKey = keyOf(here.pathname) === keyOf(entry.pathname);
+        const sectionSwitch = keyOf(entry.pathname) === SETTINGS_BASE && !entry.search; // pindah bagian Pengaturan tidak memuat ulang halaman
+        const bump = sameKey && !sectionSwitch && (entry.search !== here.search || Boolean(entry.state?.toast || entry.state?.refresh));
+        const base = replace ? t.hist.slice(0, t.idx) : t.hist.slice(0, t.idx + 1);
+        const hist = [...base, entry].slice(-MAX_HIST);
+        return { ...t, hist, idx: hist.length - 1, rev: bump ? t.rev + 1 : t.rev };
+      })
+    );
+  }, []);
+
+  // Alamat browser berubah (klik menu, tautan, navigate) → buka di tab yang sedang aktif.
   useEffect(() => {
-    // Alamat lama: /finance-ho/pengaturan(?tab=bank) dan /finance-ho/pembelian/klasifikasi → anak menu Pengaturan Umum
     const bare = location.pathname.replace(/\/+$/, "");
     // Alamat lama Buku Besar / Jurnal → satu menu General Ledger (tab dipilih lewat ?tab=)
     if (bare === "/finance-ho/buku-besar" || bare === "/finance-ho/jurnal-umum") {
@@ -467,76 +544,69 @@ export default function FinanceLayout({ routes }) {
       navRef.current(`/finance-ho/general-ledger?${q.toString()}`, { replace: true, state: location.state });
       return;
     }
+    // Alamat lama: /finance-ho/pengaturan(?tab=bank) dan /finance-ho/pembelian/klasifikasi → anak menu Pengaturan Umum
     if (bare === SETTINGS_BASE || bare === "/finance-ho/pembelian/klasifikasi") {
       const sec = bare === SETTINGS_BASE ? new URLSearchParams(location.search).get("tab") || "cabang" : "klasifikasi";
       navRef.current(settingsPath(sec), { replace: true, state: location.state });
       return;
     }
-    const key = keyOf(location.pathname, location.search);
+    const key = keyOf(location.pathname);
     if (!key) {
-      navRef.current(PINNED_KEY, { replace: true });
+      navRef.current(DEFAULT_PATH, { replace: true });
       return;
     }
-    const cur = tabsRef.current;
+    const target = location.pathname + location.search;
+    if (expectedRef.current !== null) {
+      const expected = expectedRef.current;
+      expectedRef.current = null;
+      if (expected === target) return; // gema dari alamat yang kita setel sendiri
+    }
+    const act = tabsRef.current.find((t) => t.id === activeRef.current) || tabsRef.current[0];
+    if (!act) return;
     const st = location.state && typeof location.state === "object" ? { ...location.state } : null;
-    const closeKey = st?.closeTab || null;
+    const closeFlag = Boolean(st?.closeTab); // form selesai disimpan: gantikan entri form agar Kembali tidak membuka form lagi
     if (st) delete st.closeTab;
     const keepState = st && Object.keys(st).length ? st : null;
-    const existing = cur.find((t) => t.key === key);
-    let next;
-    let replacedKey = null;
-    if (existing) {
-      // Klik menu biasa (tanpa parameter) pada tab yang sudah terbuka hanya memindahkan fokus, tidak mengubah isinya.
-      const focusOnly = !location.search && existing.pathname === location.pathname;
-      const same = focusOnly || (existing.pathname === location.pathname && existing.search === location.search);
-      // Pindah anak menu Pengaturan Umum cukup ganti bagian, halamannya tidak dimuat ulang
-      const sectionSwitch = key === SETTINGS_BASE && !location.search;
-      // Parameter berbeda (mis. ?date=… dari tautan lain) atau ada pesan baru → muat ulang halaman itu.
-      const bump = (!same && !sectionSwitch) || Boolean(keepState?.toast || keepState?.refresh);
-      next = cur.map((t) => (t.key === key ? { ...t, pathname: location.pathname, search: focusOnly ? t.search : location.search, state: keepState, rev: bump ? t.rev + 1 : t.rev } : t));
-    } else {
-      const nt = { key, pathname: location.pathname, search: location.search, state: keepState, rev: 0, opener: activeRef.current };
-      const activeIdx = cur.findIndex((t) => t.key === activeRef.current);
-      // Menu baru menggantikan tab yang sedang aktif (seperti tautan biasa), bukan selalu buka tab baru.
-      // Kecuali: form anak (selalu di sebelah halaman asalnya), tab Dashboard (tidak boleh ditimpa), atau tab aktif belum disimpan.
-      const canReplace = !isChild(key) && activeIdx >= 0 && !isPinned(cur[activeIdx].key) && !dirtyRef.current[activeRef.current];
-      if (canReplace) {
-        replacedKey = cur[activeIdx].key;
-        next = cur.map((t, i) => (i === activeIdx ? nt : t));
-      } else {
-        if (cur.length >= MAX_TABS) {
-          setNotice(`Batas ${MAX_TABS} tab tercapai. Tutup satu tab dulu sebelum membuka halaman lain.`);
-          const back = cur.find((t) => t.key === activeRef.current) || cur[0];
-          navRef.current(back.pathname + back.search, { replace: true });
-          return;
-        }
-        const at = isChild(key) ? activeIdx : -1;
-        next = at >= 0 ? [...cur.slice(0, at + 1), nt, ...cur.slice(at + 1)] : [...cur, nt];
-      }
+    const here = curOf(act);
+    const samePath = here.pathname === location.pathname;
+    // Klik menu halaman yang sedang terbuka (tanpa parameter baru): tidak mengubah apa pun, isian dan filter tetap
+    if (samePath && (!location.search || location.search === here.search) && !(keepState?.toast || keepState?.refresh)) return;
+    const entry = { pathname: location.pathname, search: location.search, state: keepState };
+    const replace = closeFlag || (samePath && location.search === here.search);
+    if (dirtyRef.current[act.id] && !closeFlag && keyOf(here.pathname) !== key) {
+      // Isian belum disimpan: kembalikan alamat, lalu tanya dulu
+      mirror(here);
+      setPending({
+        run: () => {
+          applyNav(act.id, entry, replace);
+          expectedRef.current = target;
+          navRef.current(target, { replace: true, state: keepState });
+        },
+      });
+      return;
     }
-    if (closeKey && closeKey !== key) next = next.filter((t) => t.key !== closeKey || isPinned(t.key));
-    setTabs(next);
-    setActiveKey(key);
-    setMounted((m) => {
-      const n = new Set(m);
-      n.add(key);
-      if (closeKey && closeKey !== key && !isPinned(closeKey)) n.delete(closeKey);
-      if (replacedKey && replacedKey !== key && !isPinned(replacedKey)) n.delete(replacedKey);
-      return n;
-    });
-    if (closeKey && closeKey !== key) setDirtyMap((d) => { const n = { ...d }; delete n[closeKey]; return n; });
-    if (replacedKey && replacedKey !== key) setDirtyMap((d) => { const n = { ...d }; delete n[replacedKey]; return n; });
+    applyNav(act.id, entry, replace);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.key]);
 
-  // Simpan daftar tab (alamatnya saja) agar tetap ada setelah halaman dimuat ulang.
+  // Simpan daftar tab (alamat dan riwayatnya) agar tetap ada setelah halaman dimuat ulang.
   useEffect(() => {
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ tabs: tabs.map((t) => ({ key: t.key, pathname: t.pathname, search: t.search })) }));
+      localStorage.setItem(
+        STORE_KEY,
+        JSON.stringify({
+          active: activeId,
+          tabs: tabs.map((t) => ({ id: t.id, idx: t.idx, hist: t.hist.map((e) => ({ pathname: e.pathname, search: e.search })) })),
+        })
+      );
     } catch {
       /* penyimpanan diblokir: abaikan */
     }
-  }, [tabs]);
+  }, [tabs, activeId]);
+
+  useEffect(() => {
+    setMounted((m) => (m.has(activeId) ? m : new Set(m).add(activeId)));
+  }, [activeId]);
 
   useEffect(() => {
     if (!notice) return undefined;
@@ -554,32 +624,56 @@ export default function FinanceLayout({ routes }) {
     });
   }, []);
 
-  const activate = useCallback((key) => {
-    const t = tabsRef.current.find((x) => x.key === key);
-    if (t) navRef.current(t.pathname + t.search);
-  }, []);
+  const activate = useCallback((id) => {
+    const t = tabsRef.current.find((x) => x.id === id);
+    if (!t) return;
+    const prev = activeRef.current;
+    if (prev && prev !== id) setTrail((tr) => [...tr.filter((k) => k !== prev && k !== id), prev].slice(-20));
+    else setTrail((tr) => tr.filter((k) => k !== id));
+    setActiveId(id);
+    setMounted((m) => (m.has(id) ? m : new Set(m).add(id)));
+    mirror(curOf(t));
+  }, [mirror]);
+
+  // Tombol +: tab baru berisi Beranda (pilih menu dari sana)
+  const newTab = useCallback(() => {
+    if (tabsRef.current.length >= MAX_TABS) {
+      setNotice(`Batas ${MAX_TABS} tab tercapai. Tutup satu tab dulu sebelum membuka tab baru.`);
+      return;
+    }
+    const nt = mkTab(NEW_TAB_PATH);
+    const prev = activeRef.current;
+    if (prev) setTrail((tr) => [...tr.filter((k) => k !== prev), prev].slice(-20));
+    setTabs((c) => [...c, nt]);
+    setActiveId(nt.id);
+    setMounted((m) => new Set(m).add(nt.id));
+    mirror(curOf(nt));
+  }, [mirror]);
 
   const performClose = useCallback((keys, focusKey) => {
     const cur = tabsRef.current;
     const closing = new Set(keys.filter((k) => !isPinned(k)));
     if (!closing.size) return;
-    const rest = cur.filter((t) => !closing.has(t.key));
+    const rest = cur.filter((t) => !closing.has(t.id));
     setTabs(rest);
     setMounted((m) => { const n = new Set(m); closing.forEach((k) => n.delete(k)); return n; });
     setDirtyMap((d) => { const n = { ...d }; closing.forEach((k) => delete n[k]); return n; });
+    setTrail((tr) => tr.filter((k) => !closing.has(k)));
     let target = null;
-    if (focusKey) target = rest.find((t) => t.key === focusKey);
+    if (focusKey) target = rest.find((t) => t.id === focusKey);
     else if (closing.has(activeRef.current)) {
-      const idx = cur.findIndex((t) => t.key === activeRef.current);
-      const closed = cur[idx];
-      target = rest.find((t) => t.key === closed?.opener) || cur.slice(idx + 1).find((t) => !closing.has(t.key)) || [...cur.slice(0, idx)].reverse().find((t) => !closing.has(t.key)) || rest[0];
+      const idx = cur.findIndex((t) => t.id === activeRef.current);
+      target = cur.slice(idx + 1).find((t) => !closing.has(t.id)) || [...cur.slice(0, idx)].reverse().find((t) => !closing.has(t.id)) || rest[0];
     }
-    if (target) navRef.current(target.pathname + target.search);
-    else if (!rest.length) navRef.current("/"); // tab terakhir ditutup → Beranda
-  }, []);
+    if (target) {
+      setActiveId(target.id);
+      setMounted((m) => (m.has(target.id) ? m : new Set(m).add(target.id)));
+      mirror(curOf(target));
+    } else if (!rest.length) navRef.current("/"); // tab terakhir ditutup → Beranda
+  }, [mirror]);
 
   const closeKeys = useCallback((keys, focusKey = null) => {
-    const real = keys.filter((k) => !isPinned(k) && tabsRef.current.some((t) => t.key === k));
+    const real = keys.filter((k) => !isPinned(k) && tabsRef.current.some((t) => t.id === k));
     if (!real.length) return;
     if (real.some((k) => dirtyRef.current[k])) setConfirm({ keys: real, focusKey });
     else performClose(real, focusKey);
@@ -587,12 +681,12 @@ export default function FinanceLayout({ routes }) {
 
   const closeOne = useCallback((key) => closeKeys([key]), [closeKeys]);
 
-  // Seret tab ke tab lain: tab yang diseret mengambil posisi tab tujuan. Dashboard tetap paling kiri.
+  // Seret tab ke tab lain: tab yang diseret mengambil posisi tab tujuan.
   const reorder = useCallback((fromKey, toKey) => {
     setTabs((cur) => {
-      const a = cur.findIndex((t) => t.key === fromKey);
-      const b = cur.findIndex((t) => t.key === toKey);
-      if (a < 0 || b < 0 || a === b || isPinned(fromKey) || isPinned(toKey)) return cur;
+      const a = cur.findIndex((t) => t.id === fromKey);
+      const b = cur.findIndex((t) => t.id === toKey);
+      if (a < 0 || b < 0 || a === b) return cur;
       const next = [...cur];
       const [m] = next.splice(a, 1);
       next.splice(b, 0, m);
@@ -600,26 +694,68 @@ export default function FinanceLayout({ routes }) {
     });
   }, []);
 
-  // Tombol kembali: mundur satu langkah riwayat (bukan langsung ke Beranda)
-  const canGoBack = (window.history.state?.idx ?? 0) > 0;
-  const goBack = useCallback(() => {
-    if ((window.history.state?.idx ?? 0) > 0) navRef.current(-1);
-    else navRef.current("/");
+  // Mundur satu halaman di dalam tab (seperti tombol kembali browser)
+  const moveTo = useCallback((id, to) => {
+    setTabs((cur) =>
+      cur.map((t) => {
+        if (t.id !== id || to < 0 || to >= t.hist.length) return t;
+        const a = curOf(t);
+        const b = t.hist[to];
+        const bump = keyOf(a.pathname) === keyOf(b.pathname) && a.search !== b.search;
+        return { ...t, idx: to, rev: bump ? t.rev + 1 : t.rev };
+      })
+    );
   }, []);
 
-  // Pintasan: Alt+W tutup tab, Alt+←/→ pindah tab
+  const stepBack = useCallback((id) => {
+    const t = tabsRef.current.find((x) => x.id === id);
+    if (!t || t.idx <= 0) return false;
+    const entry = t.hist[t.idx - 1];
+    const run = () => {
+      moveTo(id, t.idx - 1);
+      if (activeRef.current === id) mirror(entry);
+    };
+    if (dirtyRef.current[id]) setPending({ run });
+    else run();
+    return true;
+  }, [moveTo, mirror]);
+
+  const active = tabs.find((t) => t.id === activeId) || tabs[0];
+  // Kembali: mundur satu halaman di tab ini; di halaman pertama tab, pindah ke tab yang sebelumnya aktif
+  const trailTarget = useMemo(() => [...trail].reverse().find((k) => k !== activeId && tabs.some((t) => t.id === k)) || null, [trail, activeId, tabs]);
+  const trailTargetRef = useRef(trailTarget);
+  trailTargetRef.current = trailTarget;
+  const canGoBack = Boolean(active && (active.idx > 0 || trailTarget));
+  const backTitle = active && active.idx > 0 ? "Kembali satu halaman di tab ini" : trailTarget ? "Kembali ke tab sebelumnya" : "Kembali ke halaman utama (Beranda)";
+  const goBack = useCallback(() => {
+    if (stepBack(activeRef.current)) return;
+    if (trailTargetRef.current) { activate(trailTargetRef.current); return; }
+    // Tidak ada halaman atau tab sebelumnya: ke halaman utama (Beranda); tanya dulu bila ada isian belum disimpan
+    const home = () => navRef.current("/");
+    if (dirtyRef.current[activeRef.current]) setPending({ run: home });
+    else home();
+  }, [stepBack, activate]);
+
+  // Halaman form (Jurnal baru / Ubah): "batal" mundur ke halaman asal; bila tab hanya punya satu halaman, tab ditutup
+  const leaveTab = useCallback((id) => {
+    if (!stepBack(id)) closeKeys([id]);
+  }, [stepBack, closeKeys]);
+
+  // Pintasan: Alt+T tab baru, Alt+W tutup tab, Alt+←/→ pindah tab
   useEffect(() => {
     const onKey = (e) => {
       if (!e.altKey || e.ctrlKey || e.metaKey) return;
       const list = tabsRef.current;
-      const i = list.findIndex((t) => t.key === activeRef.current);
-      if (e.key.toLowerCase() === "w") { e.preventDefault(); closeOne(activeRef.current); }
-      else if (e.key === "ArrowRight" && list.length > 1) { e.preventDefault(); activate(list[(i + 1) % list.length].key); }
-      else if (e.key === "ArrowLeft" && list.length > 1) { e.preventDefault(); activate(list[(i - 1 + list.length) % list.length].key); }
+      const i = list.findIndex((t) => t.id === activeRef.current);
+      const k = e.key.toLowerCase();
+      if (k === "t") { e.preventDefault(); newTab(); }
+      else if (k === "w") { e.preventDefault(); closeOne(activeRef.current); }
+      else if (e.key === "ArrowRight" && list.length > 1) { e.preventDefault(); activate(list[(i + 1) % list.length].id); }
+      else if (e.key === "ArrowLeft" && list.length > 1) { e.preventDefault(); activate(list[(i - 1 + list.length) % list.length].id); }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [activate, closeOne]);
+  }, [activate, closeOne, newTab]);
 
   // Peringatan bila memuat ulang / menutup browser saat ada isian belum disimpan
   const anyDirty = Object.keys(dirty).length > 0;
@@ -638,13 +774,21 @@ export default function FinanceLayout({ routes }) {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
   useLayoutEffect(() => {
-    window.scrollTo(0, scrollPos.current[activeKey] || 0);
-  }, [activeKey]);
+    window.scrollTo(0, scrollPos.current[activeId] || 0);
+  }, [activeId]);
+
+  // Bentuk ringkas untuk bar tab: id, halaman sekarang, dan kunci halamannya (judul & ikon)
+  const viewTabs = useMemo(() => tabs.map((t) => ({ key: t.id, pathname: curOf(t).pathname, pageKey: keyOf(curOf(t).pathname) || curOf(t).pathname })), [tabs]);
+  const titleOfTab = (id) => {
+    const t = tabs.find((x) => x.id === id);
+    return t ? infoOf(keyOf(curOf(t).pathname) || curOf(t).pathname, curOf(t).pathname).title : "tab";
+  };
 
   const group = findGroup(pathname);
   // Menu samping diganti hamburger yang membuka ke kanan. Anak menu (mis. Pengaturan Umum) dibuat sejajar.
   const navItems = useMemo(
-    () => (group ? group.items.flatMap((it) => (it.children ? it.children : [it])).map((it) => ({ id: it.to, label: it.label, icon: it.icon, hint: it.description })) : []),
+    // Item bersub-menu (Pengaturan Umum) tampil sebagai satu pilihan; bagian-bagiannya ada di daftar sisi kiri halamannya
+    () => (group ? group.items.map((it) => ({ id: it.to, label: it.label, icon: it.icon, hint: it.description })) : []),
     [group]
   );
   const navActive = useMemo(() => {
@@ -662,21 +806,21 @@ export default function FinanceLayout({ routes }) {
     document.title = "HO Finance | Alora SuperApp";
   }, []);
 
-  const confirmTitles = confirm ? confirm.keys.filter((k) => dirty[k]).map((k) => infoOf(k).title) : [];
+  const confirmTitles = confirm ? confirm.keys.filter((k) => dirty[k]).map((k) => titleOfTab(k)) : [];
 
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-800 antialiased font-sans">
       {/* ── Main Content Area ────────────────────────────────────────────── */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <TabBar tabs={tabs} activeKey={activeKey} dirty={dirty} onActivate={activate} onClose={closeOne} onCloseMany={closeKeys} onReorder={reorder} canGoBack={canGoBack} onBack={goBack} onHome={() => navigate("/")} trailing={<UserMenu />} />
+        <TabBar tabs={viewTabs} activeKey={activeId} dirty={dirty} onActivate={activate} onClose={closeOne} onCloseMany={closeKeys} onReorder={reorder} onNew={newTab} canGoBack={canGoBack} backTitle={backTitle} onBack={goBack} onHome={() => navigate("/")} trailing={<UserMenu />} />
 
         {/* Halaman tiap tab: yang tidak aktif disembunyikan, bukan dibuang */}
         <main className="flex-1">
           {/* Hamburger sub-menu ditaruh PageHeader di sisi kiri kartu alat (di bawah judul), sejajar dengan filter */}
           <SubNavContext.Provider value={subNav}>
-            {tabs.filter((t) => mounted.has(t.key)).map((t) => (
-              <div key={t.key} hidden={t.key !== activeKey} role="tabpanel">
-                <TabView routes={routes} tab={t} setDirty={setDirty} closeTab={closeOne} />
+            {tabs.filter((t) => mounted.has(t.id)).map((t) => (
+              <div key={t.id} hidden={t.id !== activeId} role="tabpanel">
+                <TabView routes={routes} tab={t} setDirty={setDirty} closeTab={leaveTab} />
               </div>
             ))}
           </SubNavContext.Provider>
@@ -688,6 +832,15 @@ export default function FinanceLayout({ routes }) {
           {notice}
         </div>
       )}
+      <ConfirmModal
+        open={Boolean(pending)}
+        tone="warning"
+        title="Pindah halaman?"
+        desc="Isian di halaman ini belum disimpan dan akan hilang."
+        confirmLabel="Pindah tanpa menyimpan"
+        onClose={() => setPending(null)}
+        onConfirm={() => { const p = pending; setPending(null); p?.run(); }}
+      />
       <ConfirmModal
         open={Boolean(confirm)}
         tone="warning"

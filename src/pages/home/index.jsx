@@ -58,7 +58,8 @@ const SLOGANS = [
   'Satu pintu untuk seluruh keuangan HO',
 ];
 
-export default function Home() {
+// embedded: dipakai sebagai isi "tab baru" di dalam layout HO Finance (tanpa kepala halaman sendiri)
+export default function Home({ embedded = false }) {
   const navigate = useNavigate();
   const { user: authUser, logout } = useAuth();
   const user = authUser || getStoredUser();
@@ -71,7 +72,7 @@ export default function Home() {
   });
 
   useEffect(() => {
-    document.title = 'Beranda | HO Finance';
+    if (!embedded) document.title = 'Beranda | HO Finance';
     const t = setInterval(() => setSloganIndex((i) => (i + 1) % SLOGANS.length), 4500);
     return () => clearInterval(t);
   }, []);
@@ -82,12 +83,13 @@ export default function Home() {
   };
 
   return (
-    <div className="relative flex min-h-screen flex-col overflow-x-hidden bg-slate-50 font-sans text-slate-800 antialiased">
+    <div className={`relative flex flex-col overflow-x-hidden bg-slate-50 font-sans text-slate-800 antialiased ${embedded ? "min-h-[70vh]" : "min-h-screen"}`}>
       {/* Brand glow halus */}
       <div className="pointer-events-none absolute -left-64 -top-64 h-[500px] w-[500px] rounded-full bg-emerald-600/5 blur-[150px]" />
       <div className="pointer-events-none absolute bottom-0 right-0 h-[500px] w-[500px] rounded-full bg-teal-500/5 blur-[150px]" />
 
       {/* Top navbar */}
+      {!embedded && (
       <header className="relative z-30 border-b border-slate-200/70 bg-white">
         <div className="flex items-center justify-between gap-3 px-3 py-2.5 sm:px-6">
           <div className="flex min-w-0 items-center gap-2.5">
@@ -116,6 +118,7 @@ export default function Home() {
           </div>
         </div>
       </header>
+      )}
 
       <main className="relative z-10 mx-auto flex w-full max-w-[1600px] flex-grow flex-col gap-5 p-3 sm:p-4 lg:gap-6 lg:p-6">
         {/* Banner */}
