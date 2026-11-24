@@ -11,7 +11,6 @@ import {
   HiOutlineCube,
   HiOutlineBuildingOffice2,
   HiOutlineDocumentChartBar,
-  HiOutlineLockClosed,
   HiOutlineCog6Tooth,
   HiOutlineBanknotes,
   HiOutlineArrowRightOnRectangle,
@@ -24,16 +23,15 @@ import { useAuth } from '../../context/AuthContext';
 // `group` disiapkan bila nanti menu dikelompokkan per modul.
 const MENU_ITEMS = [
   { key: 'dashboard', group: 'dashboard', path: '/finance-ho/dashboard', label: 'Dashboard', hint: 'Ringkasan Semua Cabang', status: 'ready', icon: HiOutlineChartBar, iconWrap: 'bg-emerald-50 text-emerald-700 group-hover:bg-emerald-100/70', labelHover: 'group-hover:text-emerald-700' },
-  { key: 'integrasi-pos', group: 'front-office', path: '/finance-ho/integrasi-pos', label: 'Integrasi POS', hint: 'Sinkronisasi & Batch', status: 'ready', icon: HiOutlineComputerDesktop, iconWrap: 'bg-sky-50 text-sky-700 group-hover:bg-sky-100/70', labelHover: 'group-hover:text-sky-700' },
-  { key: 'jurnal', group: 'general-ledger', path: '/finance-ho/jurnal-umum', label: 'Jurnal', hint: 'Jurnal Umum & Manual', status: 'ready', icon: HiOutlineBookOpen, iconWrap: 'bg-teal-50 text-teal-700 group-hover:bg-teal-100/70', labelHover: 'group-hover:text-teal-700' },
-  { key: 'rekonsiliasi', group: 'front-office', path: '/finance-ho/rekonsiliasi', label: 'Rekonsiliasi', hint: 'Mutasi bank, Kas & QRIS', status: 'ready', icon: HiOutlineScale, iconWrap: 'bg-indigo-50 text-indigo-700 group-hover:bg-indigo-100/70', labelHover: 'group-hover:text-indigo-700' },
-  { key: 'pelanggan', group: 'front-office', path: '/finance-ho/pelanggan/deposit', label: 'Pelanggan', hint: 'Deposit Member', status: 'ready', icon: HiOutlineUsers, iconWrap: 'bg-rose-50 text-rose-700 group-hover:bg-rose-100/70', labelHover: 'group-hover:text-rose-700' },
+  { key: 'integrasi-pos', group: 'front-office', path: '/finance-ho/integrasi-pos', label: 'Front Office Cashier', hint: 'Transaksi POS & Setoran Kasir', status: 'ready', icon: HiOutlineComputerDesktop, iconWrap: 'bg-sky-50 text-sky-700 group-hover:bg-sky-100/70', labelHover: 'group-hover:text-sky-700' },
+  { key: 'jurnal', group: 'general-ledger', path: '/finance-ho/general-ledger', label: 'General Ledger', hint: 'Buku Besar & Jurnal', status: 'ready', icon: HiOutlineBookOpen, iconWrap: 'bg-teal-50 text-teal-700 group-hover:bg-teal-100/70', labelHover: 'group-hover:text-teal-700' },
+  { key: 'rekonsiliasi', group: 'front-office', path: '/finance-ho/rekonsiliasi', label: 'Account Receivable', hint: 'Mutasi bank, Kas & QRIS', status: 'ready', icon: HiOutlineScale, iconWrap: 'bg-indigo-50 text-indigo-700 group-hover:bg-indigo-100/70', labelHover: 'group-hover:text-indigo-700' },
+  { key: 'pelanggan', group: 'front-office', path: '/finance-ho/pelanggan/daftar', label: 'Customer', hint: 'Daftar & Riwayat Deposit', status: 'ready', icon: HiOutlineUsers, iconWrap: 'bg-rose-50 text-rose-700 group-hover:bg-rose-100/70', labelHover: 'group-hover:text-rose-700' },
   { key: 'kas-kecil', group: 'front-office', path: '/finance-ho/kas-kecil', label: 'Kas Kecil', hint: 'Pengeluaran & Isi Ulang', status: 'soon', icon: HiOutlineWallet, iconWrap: 'bg-amber-50 text-amber-700 group-hover:bg-amber-100/70', labelHover: 'group-hover:text-amber-700' },
-  { key: 'pembelian', group: 'purchasing', path: '/finance-ho/pembelian/pengajuan', label: 'Pembelian', hint: 'Pengajuan, Bayar & Kredit', status: 'ready', icon: HiOutlineShoppingCart, iconWrap: 'bg-orange-50 text-orange-700 group-hover:bg-orange-100/70', labelHover: 'group-hover:text-orange-700' },
-  { key: 'persediaan', group: 'inventory', path: '/finance-ho/persediaan', label: 'Persediaan', hint: 'Stok, Transfer & Opname', status: 'soon', icon: HiOutlineCube, iconWrap: 'bg-lime-50 text-lime-700 group-hover:bg-lime-100/70', labelHover: 'group-hover:text-lime-700' },
+  { key: 'pembelian', group: 'purchasing', path: '/finance-ho/pembelian/pengajuan', label: 'Account Payable', hint: 'Pengajuan, Bayar & Kredit', status: 'ready', icon: HiOutlineShoppingCart, iconWrap: 'bg-orange-50 text-orange-700 group-hover:bg-orange-100/70', labelHover: 'group-hover:text-orange-700' },
+  { key: 'persediaan', group: 'inventory', path: '/finance-ho/persediaan', label: 'Inventory', hint: 'Stok, Transfer & Opname', status: 'soon', icon: HiOutlineCube, iconWrap: 'bg-lime-50 text-lime-700 group-hover:bg-lime-100/70', labelHover: 'group-hover:text-lime-700' },
   { key: 'aset-tetap', group: 'fixed-asset', path: '/finance-ho/aset-tetap', label: 'Aset Tetap', hint: 'Daftar & Penyusutan', status: 'ready', icon: HiOutlineBuildingOffice2, iconWrap: 'bg-violet-50 text-violet-700 group-hover:bg-violet-100/70', labelHover: 'group-hover:text-violet-700' },
-  { key: 'laporan', group: 'report-setup', path: '/finance-ho/laporan', label: 'Laporan', hint: 'Laporan Keuangan & Buku Besar', status: 'ready', icon: HiOutlineDocumentChartBar, iconWrap: 'bg-cyan-50 text-cyan-700 group-hover:bg-cyan-100/70', labelHover: 'group-hover:text-cyan-700' },
-  { key: 'tutup-buku', group: 'general-ledger', path: '/finance-ho/tutup-buku', label: 'Tutup Buku', hint: 'Checklist Periode', status: 'ready', icon: HiOutlineLockClosed, iconWrap: 'bg-fuchsia-50 text-fuchsia-700 group-hover:bg-fuchsia-100/70', labelHover: 'group-hover:text-fuchsia-700' },
+  { key: 'laporan', group: 'report-setup', path: '/finance-ho/laporan', label: 'Laporan', hint: 'Laba Rugi, Neraca & Arus Kas', status: 'ready', icon: HiOutlineDocumentChartBar, iconWrap: 'bg-cyan-50 text-cyan-700 group-hover:bg-cyan-100/70', labelHover: 'group-hover:text-cyan-700' },
   { key: 'pengaturan', group: 'report-setup', path: '/finance-ho/pengaturan', label: 'Pengaturan', hint: 'Cabang, Metode Bayar & Akun', status: 'ready', icon: HiOutlineCog6Tooth, iconWrap: 'bg-slate-100 text-slate-700 group-hover:bg-slate-200/70', labelHover: 'group-hover:text-slate-700' },
 ];
 

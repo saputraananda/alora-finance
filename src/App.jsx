@@ -6,9 +6,8 @@ import { ProtectedRoute, GuestRoute } from './components/RouteGuards.jsx';
 import FinanceLayout from './components/FinanceLayout.jsx';
 import DashboardFinance from './pages/dashboard';
 import Rekonsiliasi from './pages/rekonsiliasi';
-import JurnalUmum from './pages/journal';
+import GeneralLedgerHub from './pages/general-ledger/Hub';
 import JurnalManual from './pages/journal/FormJurnalManual';
-import BukuBesar from './pages/general-ledger';
 import COA from './pages/coa';
 import AnggaranBeban from './pages/budgets';
 import Home from './pages/home';
@@ -16,7 +15,7 @@ import PosIntegration from './pages/pos-integration';
 import Pengaturan from './pages/settings';
 import LaporanKeuangan from './pages/reports';
 import DepositMember from './pages/customers/DepositMember';
-import TutupBuku from './pages/closing';
+import DaftarCustomer from './pages/customers/DaftarCustomer';
 import AsetTetap from './pages/fixed-assets';
 import Pengajuan from './pages/purchasing/Pengajuan';
 import Pembayaran from './pages/purchasing/Pembayaran';
@@ -29,17 +28,16 @@ const FINANCE_ROUTES = [
   { path: 'integrasi-pos', element: <PosIntegration /> },
   { path: 'pengaturan/*', element: <Pengaturan /> },
   { path: 'laporan', element: <LaporanKeuangan /> },
+  { path: 'pelanggan/daftar', element: <DaftarCustomer /> },
   { path: 'pelanggan/deposit', element: <DepositMember /> },
-  { path: 'tutup-buku', element: <TutupBuku /> },
   { path: 'pembelian/pengajuan', element: <Pengajuan /> },
   { path: 'pembelian/pembayaran', element: <Pembayaran /> },
   { path: 'pembelian/kredit', element: <Kredit /> },
   { path: 'aset-tetap', element: <AsetTetap /> },
   { path: 'rekonsiliasi', element: <Rekonsiliasi /> },
-  { path: 'jurnal-umum', element: <JurnalUmum /> },
+  { path: 'general-ledger', element: <GeneralLedgerHub /> },
   { path: 'jurnal-umum/baru', element: <JurnalManual /> },
   { path: 'jurnal-umum/:id/ubah', element: <JurnalManual /> },
-  { path: 'buku-besar', element: <BukuBesar /> },
   { path: 'coa', element: <COA /> },
   { path: 'anggaran-beban', element: <AnggaranBeban /> },
 ];

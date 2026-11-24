@@ -17,7 +17,7 @@ export default function JurnalTerkini() {
       subtitle="5 jurnal terakhir yang sudah dibukukan"
      
       right={
-        <Link to="/finance-ho/jurnal-umum" className="flex items-center gap-1 text-[11px] font-bold text-emerald-700 hover:underline">
+        <Link to="/finance-ho/general-ledger?tab=jurnal" className="flex items-center gap-1 text-[11px] font-bold text-emerald-700 hover:underline">
           Semua jurnal <HiOutlineArrowRight className="h-3 w-3" />
         </Link>
       }
