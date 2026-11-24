@@ -5,12 +5,14 @@ import {
   saveExplanation,
   requestExplanation,
   approveDay,
+  transferToGl,
   getDeposits,
   saveDeposit,
   deleteDeposit,
   slipMiddleware,
   uploadSlip,
 } from '../../controllers/rekon/rekon.controller.js';
+import { getResults, transferResults } from '../../controllers/rekon/reconResults.controller.js';
 import {
   getBankRecon,
   bankFileMiddleware,
@@ -40,6 +42,9 @@ import {
   explainMatch,
   getMatch,
   getHistory,
+  getOpenPiutang,
+  getParties,
+  getInternalDetail,
 } from '../../controllers/rekon/reconWorkspace.controller.js';
 
 const router = express.Router();
@@ -50,6 +55,9 @@ router.get('/rekon/day', getRekonDay);
 router.post('/rekon/explain', saveExplanation);
 router.post('/rekon/request-explanation', requestExplanation);
 router.post('/rekon/approve', approveDay);
+router.post('/rekon/transfer-to-gl', transferToGl);
+router.get('/rekon/results', getResults);
+router.post('/rekon/results/transfer', transferResults);
 
 router.get('/rekon/deposits', getDeposits);
 router.post('/rekon/deposits', saveDeposit);
@@ -67,6 +75,9 @@ router.post('/rekon/workspace/unmatch', undoMatch);
 router.post('/rekon/workspace/explain', explainMatch);
 router.get('/rekon/workspace/match/:id', getMatch);
 router.get('/rekon/workspace/history', getHistory);
+router.get('/rekon/workspace/open-piutang', getOpenPiutang);
+router.get('/rekon/workspace/parties', getParties);
+router.get('/rekon/workspace/internal-detail', getInternalDetail);
 // Import mutasi bank (pratinjau → konfirmasi) dan riwayat file
 router.get('/rekon/bank/import/adapters', listAdapters);
 router.post('/rekon/bank/import/preview', importFileMiddleware, previewImport);

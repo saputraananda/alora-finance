@@ -8,6 +8,7 @@ import { computeDay, loadAccountMap } from "../pos/pos.controller.js";
 import { loadOutletOverrides } from "../../utils/accountResolver.js";
 import { loadStartDates, beforeStart, startMessage } from "../../utils/outletStart.js";
 import { lockDateMessage } from "../../utils/dayLock.js";
+import { ACTIVE_MATCH } from "./reconWorkspace.controller.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // REKONSILIASI HARIAN — per cabang, per hari, per metode bayar
@@ -28,8 +29,8 @@ const TOLERANCE = 1; // Rp, untuk pembulatan
 export const ROLES = {
   BEBAN_MDR: { label: "Beban MDR", code: "5-1009" },
   SELISIH_KAS: { label: "Selisih Kas", code: "5-1010" },
-  PIUTANG_KARYAWAN: { label: "Piutang Karyawan", code: "1-1009" },
-  PENDAPATAN_LAIN: { label: "Pendapatan Lain-lain", code: "4-1003" },
+  PIUTANG_KARYAWAN: { label: "Piutang Karyawan", code: "1-1430" },
+  PENDAPATAN_LAIN: { label: "Pendapatan Lain-lain", code: "4-1300" },
 };
 
 // ── Upload slip setoran (data lama) ─────────────────────────────────────
@@ -88,8 +89,10 @@ async function buildDay(date) {
     pool
       .query(
         `SELECT i.outlet_id, SUBSTRING_INDEX(i.ref_key, '|', -1) AS method, SUM(i.amount) AS matched_pos, SUM(i.counter_amount) AS bank_amount,
-                MAX(m.status = 'DIFF' AND m.explanation IS NOT NULL AND m.explanation <> '') AS explained
-         FROM tr_recon_match_item i JOIN tr_recon_match m ON m.id = i.match_id AND m.undone_at IS NULL
+                MAX(m.status = 'DIFF' AND m.explanation IS NOT NULL AND m.explanation <> '') AS explained,
+                MAX(CASE WHEN m.status = 'DIFF' THEN m.alloc_type END) AS alloc_type, MAX(CASE WHEN m.status = 'DIFF' THEN m.alloc_party END) AS alloc_party,
+                MAX(CASE WHEN m.status = 'DIFF' THEN m.alloc_ref_match_id END) AS alloc_ref
+         FROM tr_recon_match_item i JOIN tr_recon_match m ON m.id = i.match_id AND ${ACTIVE_MATCH}
          WHERE i.side = 'INTERNAL' AND i.ref_type = 'POS_ONLINE' AND i.ref_key LIKE CONCAT('%|', DATE_FORMAT(?, '%Y-%m-%d'), '|%')
          GROUP BY i.outlet_id, method`,
         [date]
@@ -105,8 +108,10 @@ async function buildDay(date) {
     // counter_amount = bagian nominal bank yang diatribusikan ke penjualan tunai ini.
     pool
       .query(
-        `SELECT i.outlet_id, SUM(i.counter_amount) AS bank_amount
-         FROM tr_recon_match_item i JOIN tr_recon_match m ON m.id = i.match_id AND m.undone_at IS NULL
+        `SELECT i.outlet_id, SUM(i.counter_amount) AS bank_amount,
+                MAX(CASE WHEN m.status = 'DIFF' THEN m.alloc_type END) AS alloc_type, MAX(CASE WHEN m.status = 'DIFF' THEN m.alloc_party END) AS alloc_party,
+                MAX(CASE WHEN m.status = 'DIFF' THEN m.alloc_ref_match_id END) AS alloc_ref
+         FROM tr_recon_match_item i JOIN tr_recon_match m ON m.id = i.match_id AND ${ACTIVE_MATCH}
          WHERE i.side = 'INTERNAL' AND i.ref_type = 'POS_CASH' AND i.ref_key = CONCAT(i.outlet_id, '|', DATE_FORMAT(?, '%Y-%m-%d'))
          GROUP BY i.outlet_id`,
         [date]
@@ -114,11 +119,29 @@ async function buildDay(date) {
       .catch(() => [[]]), // tabel pencocokan belum ada (migrasi 004 belum dijalankan): pakai setoran lama saja
   ]);
   const postedSet = new Set(postedRows.map((r) => Number(r.outlet_id)));
+  // Metode yang sudah ditransfer ke General Ledger (per cabang): Map(outlet → Map(metode → baris))
+  const [tmRows] = await pool.query(`SELECT t.outlet_id, t.method, t.journal_id, t.approved_at, je.entry_no FROM tr_recon_daily_method t LEFT JOIN tr_journal_entries je ON je.id = t.journal_id WHERE t.rec_date = ?`, [date]).then(([r]) => [r]).catch(() => [[]]);
+  const tmBy = new Map();
+  tmRows.forEach((r) => { const m = tmBy.get(Number(r.outlet_id)) || new Map(); m.set(r.method, r); tmBy.set(Number(r.outlet_id), m); });
+  // Jurnal Setoran Kasir (Dr Kas Sentral / Cr Kas cabang) pada tanggal ini: uang tunai yang sudah "dalam perjalanan" ke bank
+  const [setoranRows] = await pool
+    .query(`SELECT outlet_id, SUM(total_amount) AS amt FROM tr_journal_entries WHERE source_type = 'SETORAN_KASIR' AND status = 'POSTED' AND reverses_entry_id IS NULL AND entry_date = ? GROUP BY outlet_id`, [date])
+    .then(([r]) => [r])
+    .catch(() => [[]]);
+  const setoranBy = new Map(setoranRows.map((r) => [Number(r.outlet_id), num(r.amt)]));
+  // Jenis baris yang dilunasi (untuk memilih akun piutang yang dikredit saat PELUNASAN)
+  const refIds = [...new Set([...sets, ...bankCash].map((x) => Number(x.alloc_ref)).filter(Boolean))];
+  const refKind = new Map();
+  if (refIds.length) {
+    const [rt] = await pool.query(`SELECT match_id, MIN(ref_type) AS t FROM tr_recon_match_item WHERE match_id IN (?) AND side = 'INTERNAL' GROUP BY match_id`, [refIds]);
+    rt.forEach((r) => refKind.set(Number(r.match_id), r.t));
+  }
+  const settleRole = (ref) => (refKind.get(Number(ref)) === "POS_CASH" ? "PIUTANG_KARYAWAN" : "PIUTANG_USAHA");
   const userNames = await getUserNames(dailies.flatMap((d) => [d.explanation_by, d.requested_by]));
   const depBy = new Map(deps.map((d) => [Number(d.outlet_id), d]));
   // Setoran manual lama (tr_cash_deposit) tetap dipakai bila ada; bila tidak, pakai mutasi bank yang dicocokkan
   bankCash.forEach((b) => {
-    if (!depBy.has(Number(b.outlet_id))) depBy.set(Number(b.outlet_id), { amount: Number(b.bank_amount), deposit_date: date, proof_url: null, notes: "Mutasi bank yang dicocokkan", from_bank: true });
+    if (!depBy.has(Number(b.outlet_id))) depBy.set(Number(b.outlet_id), { amount: Number(b.bank_amount), deposit_date: date, proof_url: null, notes: "Mutasi bank yang dicocokkan", from_bank: true, alloc_type: b.alloc_type, alloc_party: b.alloc_party, alloc_ref: b.alloc_ref });
   });
   const setBy = new Map(sets.map((s) => [`${s.outlet_id}|${s.method}`, s]));
   const dailyBy = new Map(dailies.map((d) => [Number(d.outlet_id), d]));
@@ -140,11 +163,16 @@ async function buildDay(date) {
       const amount = num(dep.amount);
       const diff = toFixed2(amount - cashPos);
       const tol = cfg.get("TUNAI")?.tolerance;
+      // Selisih tunai yang sudah dialokasikan di dialog pencocokan (Bank Charge / Piutang bila kurang; Deposit / Pelunasan bila lebih)
+      const cashAlloc = dep.alloc_type && ((diff < -TOLERANCE && ["BANK_CHARGE", "PIUTANG"].includes(dep.alloc_type)) || (diff > TOLERANCE && ["DEPOSIT", "PELUNASAN"].includes(dep.alloc_type)))
+        ? { type: dep.alloc_type, party: dep.alloc_party || null, ref: dep.alloc_ref || null }
+        : null;
       tunai = {
         key: "TUNAI", label: "Tunai", pos: cashPos, bank: amount, mdr: 0, diff,
         tolerance: tol == null ? null : Number(tol),
         within_tolerance: tol != null && !near(amount, cashPos) && Math.abs(diff) <= Number(tol),
-        status: near(amount, cashPos) ? "COCOK" : "SELISIH",
+        alloc: cashAlloc,
+        status: near(amount, cashPos) ? "COCOK" : cashAlloc ? "SELISIH_DIJELASKAN" : "SELISIH",
         deposit: { amount, deposit_date: String(dep.deposit_date).slice(0, 10), proof_url: dep.proof_url, notes: dep.notes },
       };
     }
@@ -159,15 +187,19 @@ async function buildDay(date) {
       const bank = num(s.bank_amount);
       const short = toFixed2(posAmount - bank); // > 0: bank menerima lebih sedikit dari POS
       const explained = Number(s.explained) === 1;
-      const mdr = short > TOLERANCE && explained ? short : 0; // selisih yang dijelaskan Finance = potongan MDR
-      const diff = toFixed2(bank + mdr - posAmount);
+      const at = s.alloc_type || null;
+      const mdr = short > TOLERANCE && explained && (!at || at === "BANK_CHARGE") ? short : 0; // selisih yang dijelaskan Finance = potongan MDR / bank charge
+      const piutang = short > TOLERANCE && at === "PIUTANG" ? short : 0; // kekurangan jadi piutang (pihak tercatat)
+      const excess = short < -TOLERANCE && (at === "DEPOSIT" || at === "PELUNASAN") ? toFixed2(-short) : 0; // uang bank lebih
+      const diff = toFixed2(bank + mdr + piutang - excess - posAmount);
       const pct = cfg.get(key)?.mdr_percent;
       const expected = pct == null ? null : toFixed2(posAmount * Number(pct) / 100);
       const mdrWarn = mdr > 0 && expected != null && Math.abs(mdr - expected) > Math.max(10, expected * 0.02);
       return {
-        key, label, pos: posAmount, bank, mdr, diff,
+        key, label, pos: posAmount, bank, mdr, diff, piutang, excess,
+        alloc: at ? { type: at, party: s.alloc_party || null, ref: s.alloc_ref || null } : null,
         mdr_expected: expected, mdr_warn: mdrWarn,
-        status: near(bank + mdr, posAmount) ? "COCOK" : "SELISIH",
+        status: near(bank + mdr + piutang - excess, posAmount) ? "COCOK" : "SELISIH",
         note: short > TOLERANCE && !explained ? "Selisih belum dijelaskan" : bank > posAmount + TOLERANCE ? "Bank lebih besar dari POS" : undefined,
         gross: posAmount,
       };
@@ -183,63 +215,90 @@ async function buildDay(date) {
       diff: toFixed2(methods.reduce((s, m) => s + (m.status === "KOSONG" || m.status === "BELUM" ? 0 : m.diff), 0)),
     };
 
-    // — Syarat bisa disetujui & pratinjau jurnal —
-    const blockers = [];
+    // — Per metode: syarat transfer & jurnalnya. Metode yang sudah beres bisa ditransfer sendiri, tanpa menunggu metode lain. —
     const treatment = daily?.treatment || "SELISIH_KAS";
     const explanation = daily?.explanation || "";
-    if (tunai.status === "BELUM") blockers.push("Tunai belum ditemukan di mutasi bank. Cocokkan di Rekonsiliasi Transaksi.");
-    for (const m of [qris, edc]) {
-      if (m.status === "BELUM") blockers.push(`${m.label} belum ditemukan di mutasi bank. Cocokkan di Rekonsiliasi Transaksi.`);
-      if (m.status === "SELISIH") blockers.push(`Selisih ${m.label} harus dijelaskan dulu di Rekonsiliasi Transaksi (mis. potongan MDR).`);
-    }
-    if (tunai.status === "SELISIH" && !explanation.trim()) blockers.push("Selisih tunai harus dijelaskan dulu.");
-    if (daily?.explain_requested) blockers.push(`Penjelasan ulang diminta${daily.request_note ? `: "${daily.request_note}"` : ""}.`);
-    const missingRoles = [];
-
-    const lines = [];
     const accO = ov.forOutlet(oid, accMap);
-    const need = (role) => {
-      const a = accO[role];
-      if (!a || !a.account_id) {
-        if (!missingRoles.includes(role)) missingRoles.push(role);
-        return null;
-      }
-      return a;
-    };
-    const add = (role, debit, credit, memo) => {
-      if (debit > 0 || credit > 0) lines.push({ account: need(role), debit, credit, memo });
-    };
-    if (!blockers.length) {
-      if (tunai.status !== "KOSONG") {
-        const short = tunai.diff < 0 ? toFixed2(-tunai.diff) : 0;
-        const over = tunai.diff > 0 ? tunai.diff : 0;
-        add("BANK", tunai.bank, 0, "Setoran tunai");
-        add(treatment, short, 0, short ? "Kas kurang" : "");
-        add("KAS", 0, tunai.pos, "Kas penjualan tunai");
-        add("PENDAPATAN_LAIN", 0, over, "Kas lebih");
-      }
-      for (const m of [qris, edc]) {
-        if (m.status === "KOSONG") continue;
-        const role = m.key === "QRIS" ? "PIUTANG_QRIS" : "PIUTANG_EDC";
-        add("BANK", m.bank, 0, `Penerimaan ${m.label} di bank`);
-        add("BEBAN_MDR", m.mdr, 0, `MDR ${m.label}`);
-        add(role, 0, toFixed2(m.bank + m.mdr), `Pelunasan piutang ${m.label}`);
-      }
-    }
-    if (missingRoles.length) blockers.push(`Pemetaan akun belum lengkap: ${missingRoles.join(", ")}.`);
-
-    let status = "OPEN";
-    if (daily?.status === "APPROVED") status = "APPROVED";
-    else if (methods.every((m) => m.status === "KOSONG")) status = "KOSONG";
-
-    // Hari baru boleh dikunci kalau penjualan POS-nya sudah diposting ke jurnal
-    // (kalau tidak, jurnal rekonsiliasi mengkredit Kas/Piutang yang belum pernah didebit).
+    const done = tmBy.get(oid) || new Map();
     const preStart = beforeStart(starts, oid, date);
+
+    const buildMethod = (m) => {
+      const blockers = [];
+      const lines = [];
+      const missing = [];
+      const need = (role) => {
+        const a = accO[role];
+        if (!a || !a.account_id) {
+          if (!missing.includes(role)) missing.push(role);
+          return null;
+        }
+        return a;
+      };
+      const add = (role, debit, credit, memo) => {
+        if (debit > 0 || credit > 0) lines.push({ account: need(role), debit, credit, memo });
+      };
+      if (m.key === "TUNAI") {
+        if (m.status === "BELUM") blockers.push("Tunai belum ditemukan di mutasi bank. Cocokkan di Rekonsiliasi Transaksi.");
+        if (m.status === "SELISIH" && !explanation.trim()) blockers.push("Selisih tunai harus dialokasikan dulu di Rekonsiliasi Transaksi (mis. Bank Charge atau Piutang).");
+        if (daily?.explain_requested) blockers.push(`Penjelasan ulang diminta${daily.request_note ? `: "${daily.request_note}"` : ""}.`);
+      } else {
+        if (m.status === "BELUM") blockers.push(`${m.label} belum ditemukan di mutasi bank. Cocokkan di Rekonsiliasi Transaksi.`);
+        if (m.status === "SELISIH") blockers.push(`Selisih ${m.label} harus dialokasikan dulu di Rekonsiliasi Transaksi (mis. Bank Charge atau Piutang).`);
+      }
+      if (!blockers.length && m.status !== "KOSONG") {
+        if (m.key === "TUNAI") {
+          const short = m.diff < 0 ? toFixed2(-m.diff) : 0;
+          const over = m.diff > 0 ? m.diff : 0;
+          const al = m.alloc;
+          const shortRole = al ? (al.type === "BANK_CHARGE" ? "BEBAN_ADMIN_BANK" : "PIUTANG_KARYAWAN") : treatment;
+          const shortMemo = al ? (al.type === "BANK_CHARGE" ? "Biaya bank (setoran tunai)" : `Kas kurang, piutang ${al.party || ""}`.trim()) : "Kas kurang";
+          const overRole = al ? (al.type === "DEPOSIT" ? "DEPOSIT_MEMBER" : settleRole(al.ref)) : "PENDAPATAN_LAIN";
+          const overMemo = al ? (al.type === "DEPOSIT" ? "Kelebihan setoran disimpan sebagai deposit" : "Pelunasan kekurangan sebelumnya") : "Kas lebih";
+          // Tunai yang sudah dijurnal sebagai Setoran Kasir ada di Kas Sentral (dalam perjalanan): pindah ke bank dari sana, bukan mengkredit Kas lagi
+          const viaSetoran = Math.min(setoranBy.get(oid) || 0, m.pos);
+          add("BANK", m.bank, 0, "Setoran tunai");
+          add(shortRole, short, 0, shortMemo);
+          add("KAS_SENTRAL", 0, viaSetoran, "Setoran kasir diterima di bank");
+          add("KAS", 0, toFixed2(m.pos - viaSetoran), "Kas penjualan tunai");
+          add(overRole, 0, over, overMemo);
+        } else {
+          const role = m.key === "QRIS" ? "PIUTANG_QRIS" : "PIUTANG_EDC";
+          add("BANK", m.bank, 0, `Penerimaan ${m.label} di bank`);
+          add("BEBAN_MDR", m.mdr, 0, `MDR / biaya bank ${m.label}`);
+          add("PIUTANG_USAHA", m.piutang, 0, `Kekurangan ${m.label}${m.alloc?.party ? ` — piutang ${m.alloc.party}` : ""}`);
+          add(role, 0, toFixed2(m.bank + m.mdr + m.piutang - m.excess), `Pelunasan piutang ${m.label}`);
+          if (m.excess > 0) add(m.alloc.type === "DEPOSIT" ? "DEPOSIT_MEMBER" : settleRole(m.alloc.ref), 0, m.excess, m.alloc.type === "DEPOSIT" ? `Kelebihan ${m.label} disimpan sebagai deposit` : "Pelunasan kekurangan sebelumnya");
+        }
+      }
+      if (missing.length) blockers.push(`Pemetaan akun belum lengkap: ${missing.join(", ")}.`);
+      return { blockers, lines };
+    };
+    methods.forEach((m) => {
+      const r = buildMethod(m);
+      const t = done.get(m.key);
+      m.transferred = Boolean(t) || daily?.status === "APPROVED";
+      m.journal_no = t?.entry_no || null;
+      m.blockers = m.transferred ? [] : r.blockers;
+      m._lines = m.transferred ? [] : r.lines;
+    });
+
+    // Status hari: terkunci penuh bila semua metode yang ada sudah ditransfer
+    const active = methods.filter((m) => m.status !== "KOSONG");
+    let status = "OPEN";
+    if (daily?.status === "APPROVED" || (active.length && active.every((m) => m.transferred))) status = "APPROVED";
+    else if (!active.length) status = "KOSONG";
     if (preStart && status === "OPEN") status = "BELUM_MULAI";
+    // Jurnal rekonsiliasi mengkredit Kas/Piutang: jurnal penjualan POS hari itu harus sudah ada
     const needsPosPost = status === "OPEN" && !postedSet.has(oid);
-    const allBlockers = needsPosPost
-      ? ["Penjualan POS tanggal ini belum diposting. Posting dulu di Integrasi POS.", ...blockers]
-      : blockers;
+    methods.forEach((m) => {
+      m.can_transfer = status === "OPEN" && !needsPosPost && !m.transferred && m.status !== "KOSONG" && !m.blockers.length && m._lines.length > 0;
+    });
+    const dayBlockers = [
+      ...(needsPosPost ? ["Jurnal penjualan POS tanggal ini belum terbentuk. Cek di Front Office Cashier › Status Sinkron POS."] : []),
+      ...methods.filter((m) => !m.transferred).flatMap((m) => m.blockers.map((b) => (m.blockers.length && active.length > 1 ? `[${m.label}] ${b}` : b))),
+    ];
+    const pending = methods.filter((m) => !m.transferred).flatMap((m) => m._lines);
+    const anyTransferred = methods.some((m) => m.transferred && m.status !== "KOSONG");
 
     return {
       outlet_id: oid,
@@ -247,7 +306,9 @@ async function buildDay(date) {
       outlet_code: codeOf.get(oid) || String(oid),
       status,
       locked: status === "APPROVED",
-      methods,
+      partial: status === "OPEN" && anyTransferred,
+      methods: methods.map(({ _lines, ...m }) => ({ ...m, lines: _lines.map((l) => ({ account_code: l.account?.code || null, account_name: l.account?.name || null, debit: l.debit, credit: l.credit, memo: l.memo })) })),
+      _methods: methods,
       total,
       transfer_info: { bank_transfer: num(row.payments.BANK), member_balance: num(row.payments.DEPOSIT_MEMBER) },
       explanation,
@@ -258,18 +319,11 @@ async function buildDay(date) {
       request_note: daily?.request_note || null,
       requested_by: daily?.requested_by ? userNames.get(Number(daily.requested_by)) || `User #${daily.requested_by}` : null,
       needs_pos_post: needsPosPost,
-      can_approve: status === "OPEN" && !allBlockers.length && lines.length > 0,
-      blockers: status === "APPROVED" ? [] : preStart ? [startMessage(starts, oid, outletName.get(oid) || row.outlet_name)] : allBlockers,
+      can_approve: methods.some((m) => m.can_transfer),
+      blockers: status === "APPROVED" ? [] : preStart ? [startMessage(starts, oid, outletName.get(oid) || row.outlet_name)] : dayBlockers,
       journal_id: daily?.journal_id || null,
       approved_at: daily?.approved_at || null,
-      lines: lines.map((l) => ({
-        account_code: l.account?.code || null,
-        account_name: l.account?.name || null,
-        debit: l.debit,
-        credit: l.credit,
-        memo: l.memo,
-        _account_id: l.account?.account_id || null,
-      })),
+      lines: pending.map((l) => ({ account_code: l.account?.code || null, account_name: l.account?.name || null, debit: l.debit, credit: l.credit, memo: l.memo })),
     };
   });
 }
@@ -281,7 +335,7 @@ export async function getRekonDay(req, res) {
     if (!isDate(date)) return res.status(422).json({ message: "Tanggal tidak valid (YYYY-MM-DD)." });
     const data = await buildDay(date);
     // _account_id hanya untuk internal posting
-    data.forEach((d) => d.lines.forEach((l) => delete l._account_id));
+    data.forEach((d) => delete d._methods);
     return res.json({ date, data });
   } catch (err) {
     console.error("[getRekonDay]", err);
@@ -330,75 +384,122 @@ export async function requestExplanation(req, res) {
   }
 }
 
-// ── POST /rekon/approve {date, outlet_id} — Setujui & kunci hari ────────
+// Transfer ke General Ledger per METODE (Tunai / QRIS / EDC) untuk satu cabang-hari. method kosong = semua metode yang sudah siap.
+// Hari terkunci penuh setelah semua metodenya ditransfer.
+async function approveOne(date, d, method, actorId) {
+  const want = method ? [].concat(method) : null;
+  const targets = (d._methods || []).filter((m) => (!want || want.includes(m.key)) && m.can_transfer);
+  if (!targets.length) {
+    const m = want && want.length === 1 ? (d._methods || []).find((x) => x.key === want[0]) : null;
+    if (m?.transferred) return { ok: false, message: `${m.label} sudah ditransfer ke General Ledger.` };
+    return { ok: false, message: (m ? m.blockers[0] : d.blockers[0]) || "Belum ada metode yang siap ditransfer." };
+  }
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [lock] = await conn.query(`SELECT id, status FROM tr_recon_daily WHERE outlet_id=? AND rec_date=? FOR UPDATE`, [d.outlet_id, date]);
+    if (lock[0]?.status === "APPROVED") {
+      await conn.rollback();
+      return { ok: false, message: "Sudah ditransfer ke General Ledger." };
+    }
+    const entries = [];
+    for (const m of targets) {
+      const totalDebit = toFixed2(m._lines.reduce((s, l) => s + l.debit, 0));
+      const totalCredit = toFixed2(m._lines.reduce((s, l) => s + l.credit, 0));
+      if (Math.abs(totalDebit - totalCredit) > 0.001) {
+        await conn.rollback();
+        return { ok: false, message: `Jurnal ${m.label} tidak seimbang, dibatalkan.` };
+      }
+      const [dup] = await conn.query(`SELECT 1 FROM tr_recon_daily_method WHERE outlet_id=? AND rec_date=? AND method=?`, [d.outlet_id, date, m.key]);
+      if (dup.length) continue;
+      const base = `JU-REK-${d.outlet_code}-${yymmdd(date)}-${m.key}`;
+      const [cnt] = await conn.query(`SELECT COUNT(*) AS n FROM tr_journal_entries WHERE source_ref = ?`, [base]);
+      const entryNo = cnt[0].n === 0 ? base : `${base}-v${cnt[0].n + 1}`;
+      const [h] = await conn.query(
+        `INSERT INTO tr_journal_entries (entry_no, entry_date, description, status, total_amount, created_by, source_type, source_ref, outlet_id, approved_by, approved_at)
+         VALUES (?, ?, ?, 'POSTED', ?, ?, 'REKONSILIASI', ?, ?, ?, NOW())`,
+        [entryNo, date, `Rekonsiliasi ${d.outlet_name} ${date} — ${m.label}`, totalDebit, actorId, base, d.outlet_id, actorId]
+      );
+      for (let i = 0; i < m._lines.length; i++) {
+        const l = m._lines[i];
+        await conn.query(`INSERT INTO tr_journal_lines (entry_id, line_no, account_id, debit, credit, memo, outlet_id) VALUES (?, ?, ?, ?, ?, ?, ?)`, [h.insertId, i + 1, l.account.account_id, l.debit, l.credit, l.memo || null, d.outlet_id]);
+      }
+      await conn.query(`INSERT INTO tr_recon_daily_method (outlet_id, rec_date, method, journal_id, approved_by, approved_at) VALUES (?, ?, ?, ?, ?, NOW())`, [d.outlet_id, date, m.key, h.insertId, actorId]);
+      entries.push({ method: m.key, label: m.label, entry_no: entryNo, id: h.insertId });
+      try {
+        await conn.query(`INSERT INTO tr_audit_logs (entity, entity_id, action, actor_id, after_value) VALUES ('tr_journal_entries', ?, 'CREATE', ?, ?)`, [h.insertId, actorId, JSON.stringify({ entry_no: entryNo, source: "REKONSILIASI", method: m.key, outlet_id: d.outlet_id, date })]);
+      } catch (e) {
+        console.warn("[approveOne] audit gagal:", e.message);
+      }
+    }
+    // Semua metode yang ada sudah ditransfer → kunci hari penuh (menolak jurnal baru ke cabang-hari ini)
+    const nowDone = new Set([...(d._methods || []).filter((m) => m.transferred).map((m) => m.key), ...entries.map((e) => e.method)]);
+    const active = (d._methods || []).filter((m) => m.status !== "KOSONG");
+    if (active.length && active.every((m) => nowDone.has(m.key))) {
+      await conn.query(
+        `INSERT INTO tr_recon_daily (outlet_id, rec_date, status, journal_id, approved_by, approved_at, snapshot) VALUES (?, ?, 'APPROVED', ?, ?, NOW(), ?)
+         ON DUPLICATE KEY UPDATE status='APPROVED', journal_id=VALUES(journal_id), approved_by=VALUES(approved_by), approved_at=NOW(), snapshot=VALUES(snapshot)`,
+        [d.outlet_id, date, entries[entries.length - 1]?.id || null, actorId, JSON.stringify({ total: d.total, methods: d.methods })]
+      );
+    }
+    await conn.commit();
+    return { ok: true, message: `${entries.map((e) => e.label).join(", ")} ditransfer ke General Ledger (${entries.map((e) => e.entry_no).join(", ")}).`, entry_no: entries[0]?.entry_no, id: entries[0]?.id, methods: entries.map((e) => e.label), entries };
+  } catch (err) {
+    await conn.rollback().catch(() => {});
+    console.error("[approveOne]", err);
+    return { ok: false, message: `Gagal mentransfer: ${err.message}` };
+  } finally {
+    conn.release();
+  }
+}
+
+// ── POST /rekon/approve {date, outlet_id, method?} — Transfer satu cabang (atau satu metode) ke General Ledger ────────
 export async function approveDay(req, res) {
-  const { date, outlet_id } = req.body || {};
-  const actorId = req.user?.id || null;
+  const { date, outlet_id, method } = req.body || {};
   if (!isDate(date) || !outlet_id) return res.status(422).json({ message: "Tanggal dan cabang wajib diisi." });
+  if (method && !["TUNAI", "QRIS", "EDC"].includes(method)) return res.status(422).json({ message: "Metode tidak valid." });
   const dateLockMsg = await lockDateMessage(date);
   if (dateLockMsg) return res.status(422).json({ message: dateLockMsg });
-
-  const conn = await pool.getConnection();
   try {
     const all = await buildDay(date);
     const d = all.find((x) => x.outlet_id === Number(outlet_id));
     if (!d) return res.status(404).json({ message: "Cabang tidak ditemukan." });
-    if (d.locked) return res.status(422).json({ message: "Hari ini sudah dikunci." });
-    if (!d.can_approve) return res.status(422).json({ message: d.blockers[0] || "Rekonsiliasi belum bisa disetujui." });
-
-    const totalDebit = toFixed2(d.lines.reduce((s, l) => s + l.debit, 0));
-    const totalCredit = toFixed2(d.lines.reduce((s, l) => s + l.credit, 0));
-    if (Math.abs(totalDebit - totalCredit) > 0.001) {
-      return res.status(422).json({ message: "Jurnal rekonsiliasi tidak seimbang, dibatalkan." });
-    }
-
-    await conn.beginTransaction();
-    const [lock] = await conn.query(`SELECT id, status FROM tr_recon_daily WHERE outlet_id=? AND rec_date=? FOR UPDATE`, [outlet_id, date]);
-    if (lock[0]?.status === "APPROVED") {
-      await conn.rollback();
-      return res.status(422).json({ message: "Hari ini sudah dikunci." });
-    }
-
-    const base = `JU-REK-${d.outlet_code}-${yymmdd(date)}`;
-    const [cnt] = await conn.query(`SELECT COUNT(*) AS n FROM tr_journal_entries WHERE source_ref = ?`, [base]);
-    const entryNo = cnt[0].n === 0 ? base : `${base}-v${cnt[0].n + 1}`;
-
-    const [h] = await conn.query(
-      `INSERT INTO tr_journal_entries
-         (entry_no, entry_date, description, status, total_amount, created_by, source_type, source_ref, outlet_id, approved_by, approved_at)
-       VALUES (?, ?, ?, 'POSTED', ?, ?, 'REKONSILIASI', ?, ?, ?, NOW())`,
-      [entryNo, date, `Rekonsiliasi ${d.outlet_name} ${date}`, totalDebit, actorId, base, d.outlet_id, actorId]
-    );
-    for (let i = 0; i < d.lines.length; i++) {
-      const l = d.lines[i];
-      await conn.query(
-        `INSERT INTO tr_journal_lines (entry_id, line_no, account_id, debit, credit, memo, outlet_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [h.insertId, i + 1, l._account_id, l.debit, l.credit, l.memo || null, d.outlet_id]
-      );
-    }
-    await conn.query(
-      `INSERT INTO tr_recon_daily (outlet_id, rec_date, status, journal_id, approved_by, approved_at, snapshot)
-       VALUES (?, ?, 'APPROVED', ?, ?, NOW(), ?)
-       ON DUPLICATE KEY UPDATE status='APPROVED', journal_id=VALUES(journal_id), approved_by=VALUES(approved_by),
-         approved_at=NOW(), snapshot=VALUES(snapshot)`,
-      [d.outlet_id, date, h.insertId, actorId, JSON.stringify({ total: d.total, methods: d.methods })]
-    );
-    try {
-      await conn.query(
-        `INSERT INTO tr_audit_logs (entity, entity_id, action, actor_id, after_value) VALUES ('tr_journal_entries', ?, 'CREATE', ?, ?)`,
-        [h.insertId, actorId, JSON.stringify({ entry_no: entryNo, source: "REKONSILIASI", outlet_id: d.outlet_id, date })]
-      );
-    } catch (e) {
-      console.warn("[approveDay] audit gagal:", e.message);
-    }
-    await conn.commit();
-    return res.status(201).json({ message: `Hari dikunci. Jurnal ${entryNo} diposting.`, entry_no: entryNo, id: h.insertId });
+    const r = await approveOne(date, d, method || null, req.user?.id || null);
+    return res.status(r.ok ? 201 : 422).json(r.ok ? r : { message: r.message });
   } catch (err) {
-    await conn.rollback().catch(() => {});
     console.error("[approveDay]", err);
-    return res.status(500).json({ message: "Gagal menyetujui rekonsiliasi", error: err.message });
-  } finally {
-    conn.release();
+    return res.status(500).json({ message: "Gagal mentransfer rekonsiliasi", error: err.message });
+  }
+}
+
+// ── POST /rekon/transfer-to-gl {date} — Transfer semua metode yang SIAP pada tanggal itu (semua cabang) ────────
+export async function transferToGl(req, res) {
+  const { date } = req.body || {};
+  if (!isDate(date)) return res.status(422).json({ message: "Pilih tanggal yang valid." });
+  const dateLockMsg = await lockDateMessage(date);
+  if (dateLockMsg) return res.status(422).json({ message: dateLockMsg });
+  try {
+    const all = await buildDay(date);
+    const results = [];
+    for (const d of all) {
+      if (d.status === "KOSONG" || d.status === "BELUM_MULAI") continue;
+      if (d.locked) { results.push({ outlet_id: d.outlet_id, outlet_name: d.outlet_name, ok: true, already: true, message: "Semua metode sudah ditransfer sebelumnya." }); continue; }
+      const r = await approveOne(date, d, null, req.user?.id || null);
+      const waiting = (d._methods || []).filter((m) => !m.transferred && m.status !== "KOSONG" && !r.methods?.includes(m.label)).map((m) => m.label);
+      results.push({
+        outlet_id: d.outlet_id, outlet_name: d.outlet_name, ok: r.ok, entry_no: r.entry_no || null, methods: r.methods || [], waiting,
+        message: r.ok ? `${r.message}${waiting.length ? ` Menunggu: ${waiting.join(", ")}.` : ""}` : r.message,
+      });
+    }
+    const done = results.filter((r) => r.ok && !r.already).length;
+    const skipped = results.filter((r) => !r.ok).length;
+    return res.json({
+      message: done ? `${done} cabang ditransfer ke General Ledger${skipped ? `, ${skipped} belum siap` : ""}.` : skipped ? `Belum ada metode yang siap ditransfer (${skipped} cabang perlu tindakan).` : "Tidak ada yang perlu ditransfer pada tanggal ini.",
+      done, skipped, results,
+    });
+  } catch (err) {
+    console.error("[transferToGl]", err);
+    return res.status(500).json({ message: "Gagal mentransfer ke General Ledger", error: err.message });
   }
 }
 
