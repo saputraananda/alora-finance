@@ -1,18 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { NavLink, useLocation, useNavigate, useRoutes } from "react-router-dom";
+import { useLocation, useNavigate, useRoutes } from "react-router-dom";
 import {
   HiOutlineArrowLeft,
   HiOutlineArrowRightOnRectangle,
-  HiOutlineBars3,
+  HiOutlineHome,
   HiOutlineComputerDesktop,
   HiOutlineCog6Tooth,
   HiOutlineUsers,
-  HiOutlineLockClosed,
   HiOutlineBuildingOffice2,
   HiOutlineXMark,
   HiOutlineChevronDown,
-  HiOutlineChevronLeft,
-  HiOutlineChevronRight,
   HiOutlineBookOpen,
   HiOutlineDocumentText,
   HiOutlineNumberedList,
@@ -29,6 +26,8 @@ import {
 
 import { clearSession } from "../lib/api";
 import ErrorBoundary from "./ui/ErrorBoundary";
+import HamburgerNav from "./HamburgerNav";
+import { SubNavContext } from "./ui/PageHeader";
 import ConfirmModal from "./ui/ConfirmModal";
 import { TabsContext } from "../lib/tabs";
 import { SETTINGS_BASE, SETTINGS_SECTIONS, settingsPath } from "../pages/settings/sections";
@@ -43,28 +42,29 @@ function cn(...classes) {
 // tampil sebagai "Segera hadir" di Beranda, tidak di sidebar.
 const STANDALONE_ITEMS = [
   { to: "/finance-ho/dashboard", icon: HiOutlineChartBar, label: "Dashboard", description: "Ringkasan semua cabang", end: false },
-  { to: "/finance-ho/integrasi-pos", icon: HiOutlineComputerDesktop, label: "Integrasi POS", description: "Sinkronisasi harian & detail batch", end: false },
-  { to: "/finance-ho/jurnal-umum", icon: HiOutlineBookOpen, label: "Jurnal", description: "Daftar jurnal & jurnal manual", end: false },
-  { to: "/finance-ho/rekonsiliasi", icon: HiOutlineScale, label: "Rekonsiliasi", description: "Cocokkan mutasi bank, harian", end: false },
+  { to: "/finance-ho/integrasi-pos", icon: HiOutlineComputerDesktop, label: "Front Office Cashier", description: "Transaksi, refund, void & setoran kasir", end: false },
+  { to: "/finance-ho/general-ledger", icon: HiOutlineBookOpen, label: "General Ledger", description: "Buku besar & jurnal", end: false },
+  { to: "/finance-ho/rekonsiliasi", icon: HiOutlineScale, label: "Account Receivable", description: "Cocokkan mutasi bank, harian", end: false },
 ];
 
 const OPERATIONAL_SECTIONS = [
   {
     id: "pelanggan",
-    label: "Pelanggan",
+    label: "Customer",
     icon: HiOutlineUsers,
     items: [
-      { to: "/finance-ho/pelanggan/deposit", icon: HiOutlineUsers, label: "Deposit Member", description: "Saldo POS vs akun Deposit", end: false },
+      { to: "/finance-ho/pelanggan/daftar", icon: HiOutlineUsers, label: "Daftar Customer", description: "Data pelanggan dari POS", end: false },
+      { to: "/finance-ho/pelanggan/deposit", icon: HiOutlineBanknotes, label: "Riwayat Deposit", description: "Deposit transaksi reguler", end: false },
     ],
   },
   {
     id: "pembelian",
-    label: "Pembelian",
+    label: "Account Payable",
     icon: HiOutlineShoppingCart,
     items: [
       { to: "/finance-ho/pembelian/pengajuan", icon: HiOutlineShoppingCart, label: "Pengajuan", description: "Antrean & semua pengajuan", end: false },
       { to: "/finance-ho/pembelian/pembayaran", icon: HiOutlineBanknotes, label: "Pembayaran", description: "Menunggu bayar", end: false },
-      { to: "/finance-ho/pembelian/kredit", icon: HiOutlineCreditCard, label: "Kredit & Cicilan", description: "Hutang & jatuh tempo", end: false },    ],
+      { to: "/finance-ho/pembelian/kredit", icon: HiOutlineCreditCard, label: "Kredit & Cicilan", description: "Hutang & jatuh tempo", end: false },],
   },
   {
     id: "aset",
@@ -80,15 +80,6 @@ const OPERATIONAL_SECTIONS = [
     icon: HiOutlineDocumentChartBar,
     items: [
       { to: "/finance-ho/laporan", icon: HiOutlineDocumentChartBar, label: "Laporan Keuangan", description: "Laba rugi, neraca, aging, rekap", end: false },
-      { to: "/finance-ho/buku-besar", icon: HiOutlineDocumentText, label: "Buku Besar", description: "Rincian mutasi & saldo per akun", end: false },
-    ],
-  },
-  {
-    id: "tutup-buku",
-    label: "Tutup Buku",
-    icon: HiOutlineLockClosed,
-    items: [
-      { to: "/finance-ho/tutup-buku", icon: HiOutlineLockClosed, label: "Tutup Buku", description: "Checklist periode & alokasi biaya pusat", end: false },
     ],
   },
 ];
@@ -141,196 +132,6 @@ function findGroup(pathname) {
   );
 }
 
-function NavItem({ to, icon: Icon, label, description, end, onClose, collapsed }) {
-  const { pathname } = useLocation();
-  const active = isItemActive(pathname, { to, end });
-
-  return (
-    <NavLink
-      to={to}
-      end={end}
-      onClick={onClose}
-      title={collapsed ? label : undefined}
-      className={cn(
-        "group relative flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition-all",
-        collapsed && "justify-center px-2",
-        active
-          ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/30 font-semibold"
-          : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-      )}
-    >
-      <div
-        className={cn(
-          "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition",
-          active
-            ? "bg-white/20 text-white"
-            : "border border-slate-200 bg-white text-slate-400 group-hover:border-slate-300 group-hover:text-slate-600"
-        )}
-      >
-        <Icon className="h-4 w-4" />
-      </div>
-      {!collapsed && (
-        <div className="min-w-0 flex-1 overflow-hidden">
-          <p className="truncate text-sm font-semibold leading-none">{label}</p>
-          <p
-            className={cn(
-              "mt-0.5 truncate text-[11px] leading-none",
-              active ? "text-emerald-100" : "text-slate-400"
-            )}
-          >
-            {description}
-          </p>
-        </div>
-      )}
-    </NavLink>
-  );
-}
-
-// Menu induk yang punya anak (pola sidebar SuperApp): klik untuk buka/tutup, anak menjorok dengan garis kiri
-function DropdownItem({ item, open, onToggle, onClose, collapsed }) {
-  const { pathname } = useLocation();
-  const Icon = item.icon;
-  const hasActiveChild = isItemActive(pathname, item);
-
-  if (collapsed) {
-    return (
-      <div className="space-y-0.5">
-        {item.children.map((c) => (
-          <NavItem key={c.to} {...c} onClose={onClose} collapsed />
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        className={cn(
-          "flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition",
-          hasActiveChild ? "bg-emerald-50 text-emerald-700" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-        )}
-      >
-        <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-white", hasActiveChild ? "border-emerald-200 text-emerald-700" : "border-slate-200 text-slate-400")}>
-          <Icon className="h-4 w-4" />
-        </div>
-        <div className="min-w-0 flex-1 overflow-hidden">
-          <p className="truncate text-sm font-semibold leading-none">{item.label}</p>
-          <p className="mt-0.5 truncate text-[11px] leading-none text-slate-400">{item.children.length} menu</p>
-        </div>
-        <HiOutlineChevronDown className={cn("h-4 w-4 shrink-0 text-slate-400 transition-transform duration-200", open && "rotate-180", hasActiveChild && "text-emerald-600")} />
-      </button>
-      <div className={cn("grid transition-[grid-template-rows] duration-200 ease-out", open ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
-        <div className="overflow-hidden">
-          <div className="ml-5 mt-1 space-y-0.5 border-l border-slate-200 pb-1 pl-2">
-            {item.children.map((c) => (
-              <NavItem key={c.to} {...c} onClose={onClose} collapsed={false} />
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Sidebar hanya dipakai untuk menu yang punya submenu (lebih dari 1 halaman).
-function Sidebar({ group, collapsed = false, onClose }) {
-  const navigate = useNavigate();
-  const { pathname } = useLocation();
-  const [openMap, setOpenMap] = useState({}); // menu induk yang dibuka/ditutup pengguna
-  const GroupIcon = group.icon;
-
-  return (
-    <div className="flex h-full flex-col overflow-hidden bg-white">
-      {/* Brand header */}
-      <div
-        className={cn(
-          "flex items-center border-b border-slate-100 py-4",
-          collapsed
-            ? "justify-center px-2"
-            : onClose
-              ? "justify-between gap-3 px-5"
-              : "px-5"
-        )}
-      >
-        {!collapsed ? (
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-600 to-teal-500 shadow-md shadow-emerald-600/20">
-              <GroupIcon className="h-5 w-5 text-white" />
-            </div>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-bold text-slate-800 leading-tight">{group.label}</p>
-              <p className="truncate text-[11px] text-slate-400">HO Finance</p>
-            </div>
-          </div>
-        ) : (
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-600 to-teal-500 shadow-md">
-            <GroupIcon className="h-5 w-5 text-white" />
-          </div>
-        )}
-        {onClose && (
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex shrink-0 items-center justify-center rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition lg:hidden"
-            aria-label="Tutup sidebar"
-          >
-            <HiOutlineXMark className="h-5 w-5" />
-          </button>
-        )}
-      </div>
-
-      <nav className={cn("flex-1 overflow-y-auto space-y-1 pt-3", collapsed ? "px-1.5" : "px-3")}>
-        <button
-          type="button"
-          onClick={() => { navigate("/"); onClose?.(); }}
-          title={collapsed ? "Beranda" : undefined}
-          className={cn(
-            "mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-900",
-            collapsed && "justify-center px-2"
-          )}
-        >
-          <HiOutlineArrowLeft className="h-5 w-5 shrink-0" />
-          {!collapsed && <span>Beranda</span>}
-        </button>
-
-        <div className="space-y-0.5">
-          {group.items.map((item) => {
-            if (!item.children) return <NavItem key={item.to} {...item} onClose={onClose} collapsed={collapsed} />;
-            const open = openMap[item.to] ?? isItemActive(pathname, item);
-            return <DropdownItem key={item.to} item={item} open={open} onToggle={() => setOpenMap((m) => ({ ...m, [item.to]: !open }))} onClose={onClose} collapsed={collapsed} />;
-          })}
-        </div>
-      </nav>
-    </div>
-  );
-}
-
-function ActiveMenuTitle() {
-  const { pathname } = useLocation();
-  const active =
-    ALL_WITH_CHILDREN.find((m) => m.end && pathname === m.to) ??
-    ALL_MENU_ITEMS.find((m) => !m.end && pathname.startsWith(m.to));
-
-  const label = active?.label ?? "Dashboard";
-  const description = active?.description ?? "HO Finance Module";
-  const Icon = active?.icon ?? HiOutlineChartBar;
-
-  return (
-    <div className="flex items-center gap-2.5">
-      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 shrink-0">
-        <Icon className="h-4 w-4" />
-      </div>
-      <div>
-        <p className="text-sm font-semibold leading-tight text-slate-800">{label}</p>
-        <p className="text-[11px] leading-tight text-slate-400">{description}</p>
-      </div>
-    </div>
-  );
-}
-
 function getStoredUser() {
   try {
     return JSON.parse(localStorage.getItem("user") || "{}") || {};
@@ -374,20 +175,20 @@ function UserMenu() {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-3 rounded-xl p-1.5 transition hover:bg-slate-50 focus:outline-none"
+        className="flex items-center gap-3 rounded-xl p-1 transition hover:bg-white/10 focus:outline-none"
       >
-        <div className="hidden text-right sm:block">
-          <p className="max-w-[240px] truncate text-xs font-bold leading-none text-slate-800 lg:max-w-[360px]" title={fullName}>
+        <div className="hidden whitespace-nowrap text-right sm:block">
+          <p className="text-xs font-bold leading-tight text-white" title={fullName}>
             {fullName}
           </p>
-          <p className="mt-1 max-w-[240px] truncate text-xs font-medium leading-none text-slate-400 lg:max-w-[360px]" title={department}>
+          <p className="mt-0.5 text-[11px] font-medium leading-tight text-emerald-100/70" title={department}>
             {department}
           </p>
         </div>
         <img
           src={avatarUrl}
           alt={fullName}
-          className="h-9 w-9 rounded-full border border-slate-200 bg-slate-100 object-cover shadow-sm"
+          className="h-9 w-9 shrink-0 rounded-full border border-white/20 bg-emerald-800 object-cover shadow-sm"
         />
       </button>
 
@@ -417,11 +218,12 @@ function UserMenu() {
 // dan posisi gulir tidak hilang saat pindah tab. Daftar tab disimpan di localStorage.
 // ════════════════════════════════════════════════════════════════════════════
 const MAX_TABS = 12;
+const MAX_SHOWN = 5; // jumlah tab yang tampil di bar (sisanya lewat dropdown)
 const PINNED_KEY = "/finance-ho/dashboard";
 const STORE_KEY = "alfi.tabs.v1";
 const TITLE_OVERRIDE = {};
 
-const isPinned = (key) => key === PINNED_KEY;
+const isPinned = () => false; // tidak ada tab yang disematkan; posisi paling kiri dipakai tombol Kembali
 const isChild = (key) => key === "jurnal-baru" || key.startsWith("jurnal-ubah:"); // form: dibuka di sebelah halaman asalnya
 
 // Kunci tab: satu halaman = satu tab. Mengembalikan null bila alamat tidak dikenal.
@@ -465,7 +267,6 @@ function loadStoredTabs(initialKey, initialPath) {
     seen.add(key);
     out.push({ key, pathname, search: search || "", state: null, rev: 0, opener: null });
   };
-  add(PINNED_KEY, PINNED_KEY, "");
   stored.forEach((t) => {
     if (t?.key === SETTINGS_BASE && String(t.pathname).replace(/\/+$/, "") === SETTINGS_BASE) {
       t = { ...t, pathname: settingsPath(new URLSearchParams(t.search || "").get("tab") || "cabang"), search: "" };
@@ -491,21 +292,11 @@ function TabView({ routes, tab, setDirty, closeTab }) {
   );
 }
 
-function TabBar({ tabs, activeKey, dirty, onActivate, onClose, onCloseMany }) {
+function TabBar({ tabs, activeKey, dirty, onActivate, onClose, onCloseMany, onReorder, canGoBack, onBack, onHome, trailing }) {
   const stripRef = useRef(null);
-  const [overflow, setOverflow] = useState(false);
   const [ctx, setCtx] = useState(null); // {x, y, key}
   const [list, setList] = useState(null); // {x, y}
-
-  useEffect(() => {
-    const el = stripRef.current;
-    if (!el) return undefined;
-    const check = () => setOverflow(el.scrollWidth > el.clientWidth + 2);
-    check();
-    const ro = new ResizeObserver(check);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [tabs.length]);
+  const [drag, setDrag] = useState(null); // {from, over}: seret tab untuk memindahkan urutan
 
   useEffect(() => {
     stripRef.current?.querySelector(`[data-tab="${CSS.escape(activeKey || "")}"]`)?.scrollIntoView({ inline: "nearest", block: "nearest" });
@@ -520,17 +311,39 @@ function TabBar({ tabs, activeKey, dirty, onActivate, onClose, onCloseMany }) {
   }, [ctx, list]);
 
   const idxOf = (key) => tabs.findIndex((t) => t.key === key);
+  // Hanya MAX_SHOWN tab yang tampil di bar; tab aktif selalu ikut tampil. Semua tab tetap ada di dropdown.
+  const shown = useMemo(() => {
+    if (tabs.length <= MAX_SHOWN) return tabs;
+    const first = tabs.slice(0, MAX_SHOWN);
+    if (first.some((t) => t.key === activeKey)) return first;
+    const act = tabs.find((t) => t.key === activeKey);
+    return act ? [...first.slice(0, MAX_SHOWN - 1), act] : first;
+  }, [tabs, activeKey]);
   const stop = (e) => e.stopPropagation();
 
   return (
-    <div className="sticky top-14 z-20 flex items-end gap-1 border-b border-slate-200 bg-slate-100 px-2 pt-1.5 print:hidden" role="tablist" aria-label="Halaman terbuka">
-      {overflow && (
-        <button type="button" onClick={() => stripRef.current?.scrollBy({ left: -240, behavior: "smooth" })} className="mb-0.5 flex h-8 w-7 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-200" aria-label="Geser tab ke kiri">
-          <HiOutlineChevronLeft className="h-4 w-4" />
-        </button>
-      )}
-      <div ref={stripRef} className="flex min-w-0 flex-1 gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {tabs.map((t) => {
+    <div className="sticky top-0 z-30 flex items-end gap-1 bg-gradient-to-r from-[#022c22] to-[#064e3b] px-3 pt-2 print:hidden" role="tablist" aria-label="Halaman terbuka">
+      <button
+        type="button"
+        onClick={onHome}
+        title="Beranda"
+        className="mb-1 flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-white/10 px-3 text-xs font-semibold text-white transition hover:bg-white/20"
+      >
+        <HiOutlineHome className="h-4 w-4" />
+        <span className="hidden sm:inline">Beranda</span>
+      </button>
+      <button
+        type="button"
+        onClick={onBack}
+        title={canGoBack ? "Kembali satu langkah" : "Kembali ke Beranda"}
+        aria-label="Kembali"
+        className="mb-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-emerald-100/80 transition hover:bg-white/10 hover:text-white"
+      >
+        <HiOutlineArrowLeft className="h-4 w-4" />
+      </button>
+      <div className="mx-1 mb-3 h-4 w-px shrink-0 bg-white/20" />
+      <div ref={stripRef} className="mr-8 flex min-w-0 flex-1 gap-0.5 overflow-hidden">
+        {shown.map((t) => {
           const { title, icon: Icon } = infoOf(t.key, t.pathname);
           const active = t.key === activeKey;
           const pinned = isPinned(t.key);
@@ -542,18 +355,25 @@ function TabBar({ tabs, activeKey, dirty, onActivate, onClose, onCloseMany }) {
               aria-selected={active}
               tabIndex={0}
               title={title}
+              draggable={!pinned}
+              onDragStart={(e) => { if (pinned) return; e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", t.key); } catch { /* abaikan */ } setDrag({ from: t.key, over: null }); }}
+              onDragOver={(e) => { if (!drag || drag.from === t.key || pinned) return; e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (drag.over !== t.key) setDrag({ ...drag, over: t.key }); }}
+              onDrop={(e) => { e.preventDefault(); if (drag && !pinned && drag.from !== t.key) onReorder(drag.from, t.key); setDrag(null); }}
+              onDragEnd={() => setDrag(null)}
               onClick={(e) => { if (e.target.closest("[data-x]")) return; onActivate(t.key); }}
               onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); onClose(t.key); } }}
               onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
               onContextMenu={(e) => { e.preventDefault(); setList(null); setCtx({ x: e.clientX, y: e.clientY, key: t.key }); }}
               onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onActivate(t.key); } }}
               className={cn(
-                "group relative flex h-9 shrink-0 cursor-pointer select-none items-center gap-2 rounded-t-xl border border-b-0 px-3 text-xs transition",
-                pinned ? "" : "min-w-[120px] max-w-[220px]",
-                active ? "border-slate-200 bg-white font-bold text-slate-800 shadow-[inset_0_2px_0_0_#059669]" : "border-transparent text-slate-500 hover:bg-slate-50"
+                "group relative flex h-10 shrink cursor-pointer select-none items-center gap-2 rounded-t-xl px-3.5 text-xs transition",
+                pinned ? "" : "min-w-[84px] max-w-[220px]",
+                active ? "bg-white font-bold text-slate-800" : "text-emerald-100/70 hover:bg-white/10 hover:text-white",
+                drag?.from === t.key && "opacity-40",
+                drag?.over === t.key && "!bg-emerald-500/30"
               )}
             >
-              <Icon className={cn("h-4 w-4 shrink-0", active ? "text-emerald-600" : "text-slate-400")} />
+              <Icon className={cn("h-4 w-4 shrink-0", active ? "text-emerald-600" : "text-emerald-100/60")} />
               {!pinned && <span className="min-w-0 flex-1 truncate">{title}</span>}
               {!pinned && dirty[t.key] && <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500 group-hover:hidden" title="Belum disimpan" />}
               {!pinned && (
@@ -561,7 +381,7 @@ function TabBar({ tabs, activeKey, dirty, onActivate, onClose, onCloseMany }) {
                   type="button"
                   data-x
                   onClick={(e) => { stop(e); onClose(t.key); }}
-                  className={cn("flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-slate-400 hover:bg-slate-200 hover:text-slate-700", dirty[t.key] && "hidden group-hover:flex")}
+                  className={cn("flex h-5 w-5 shrink-0 items-center justify-center rounded-md", active ? "text-slate-400 hover:bg-slate-200 hover:text-slate-700" : "text-emerald-100/50 hover:bg-white/15 hover:text-white", dirty[t.key] && "hidden group-hover:flex")}
                   aria-label={`Tutup tab ${title}`}
                 >
                   <HiOutlineXMark className="h-3.5 w-3.5" />
@@ -569,22 +389,18 @@ function TabBar({ tabs, activeKey, dirty, onActivate, onClose, onCloseMany }) {
               )}
             </div>
           );
-        })}
-      </div>
-      {overflow && (
-        <button type="button" onClick={() => stripRef.current?.scrollBy({ left: 240, behavior: "smooth" })} className="mb-0.5 flex h-8 w-7 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-200" aria-label="Geser tab ke kanan">
-          <HiOutlineChevronRight className="h-4 w-4" />
+        })}    <button
+          type="button"
+          onMouseDown={stop}
+          onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setCtx(null); setList(list ? null : { x: r.right, y: r.bottom + 4 }); }}
+          className="mb-1 flex h-8 shrink-0 items-center gap-1 rounded-lg px-2 text-[11px] font-bold text-emerald-100/70 hover:bg-white/10"
+          title="Semua halaman yang terbuka"
+        >
+          <HiOutlineChevronDown className="h-3.5 w-3.5" /> {tabs.length}/{MAX_TABS}
         </button>
-      )}
-      <button
-        type="button"
-        onMouseDown={stop}
-        onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setCtx(null); setList(list ? null : { x: r.right, y: r.bottom + 4 }); }}
-        className="mb-0.5 flex h-8 shrink-0 items-center gap-1 rounded-lg px-2 text-[11px] font-bold text-slate-500 hover:bg-slate-200"
-        title="Semua halaman yang terbuka"
-      >
-        <HiOutlineChevronDown className="h-3.5 w-3.5" /> {tabs.length}/{MAX_TABS}
-      </button>
+      </div>
+
+      {trailing && <div className="mb-1 ml-auto shrink-0 pl-4">{trailing}</div>}
 
       {ctx && (
         <div onMouseDown={stop} style={{ left: Math.min(ctx.x, window.innerWidth - 220), top: ctx.y }} className="fixed z-[60] w-52 rounded-xl border border-slate-200 bg-white p-1 text-xs shadow-xl">
@@ -592,7 +408,7 @@ function TabBar({ tabs, activeKey, dirty, onActivate, onClose, onCloseMany }) {
             ["Tutup tab", isPinned(ctx.key), () => onClose(ctx.key)],
             ["Tutup tab lainnya", tabs.every((t) => t.key === ctx.key || isPinned(t.key)), () => onCloseMany(tabs.filter((t) => t.key !== ctx.key).map((t) => t.key), ctx.key)],
             ["Tutup tab di kanan", idxOf(ctx.key) >= tabs.length - 1, () => onCloseMany(tabs.slice(idxOf(ctx.key) + 1).map((t) => t.key), ctx.key)],
-            ["Tutup semua (kecuali Dashboard)", tabs.every((t) => isPinned(t.key)), () => onCloseMany(tabs.map((t) => t.key), PINNED_KEY)],
+            ["Tutup semua tab", false, () => onCloseMany(tabs.map((t) => t.key), null)],
           ].map(([label, disabled, fn]) => (
             <button key={label} type="button" disabled={disabled} onClick={() => { setCtx(null); fn(); }} className="block w-full rounded-lg px-3 py-2 text-left font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent">
               {label}
@@ -622,9 +438,6 @@ export default function FinanceLayout({ routes }) {
   const location = useLocation();
   const { pathname } = location;
   const navigate = useNavigate();
-  const [mobileOpen, setMobileOpen] = useState(false);
-  const [desktopCollapsed, setCollapsed] = useState(false);
-  const drawerRef = useRef(null);
 
   // ── Tab ────────────────────────────────────────────────────────────────
   const initialKey = keyOf(pathname, location.search);
@@ -647,6 +460,13 @@ export default function FinanceLayout({ routes }) {
   useEffect(() => {
     // Alamat lama: /finance-ho/pengaturan(?tab=bank) dan /finance-ho/pembelian/klasifikasi → anak menu Pengaturan Umum
     const bare = location.pathname.replace(/\/+$/, "");
+    // Alamat lama Buku Besar / Jurnal → satu menu General Ledger (tab dipilih lewat ?tab=)
+    if (bare === "/finance-ho/buku-besar" || bare === "/finance-ho/jurnal-umum") {
+      const q = new URLSearchParams(location.search);
+      q.set("tab", bare === "/finance-ho/jurnal-umum" ? "jurnal" : "ledger");
+      navRef.current(`/finance-ho/general-ledger?${q.toString()}`, { replace: true, state: location.state });
+      return;
+    }
     if (bare === SETTINGS_BASE || bare === "/finance-ho/pembelian/klasifikasi") {
       const sec = bare === SETTINGS_BASE ? new URLSearchParams(location.search).get("tab") || "cabang" : "klasifikasi";
       navRef.current(settingsPath(sec), { replace: true, state: location.state });
@@ -755,6 +575,7 @@ export default function FinanceLayout({ routes }) {
       target = rest.find((t) => t.key === closed?.opener) || cur.slice(idx + 1).find((t) => !closing.has(t.key)) || [...cur.slice(0, idx)].reverse().find((t) => !closing.has(t.key)) || rest[0];
     }
     if (target) navRef.current(target.pathname + target.search);
+    else if (!rest.length) navRef.current("/"); // tab terakhir ditutup → Beranda
   }, []);
 
   const closeKeys = useCallback((keys, focusKey = null) => {
@@ -765,6 +586,26 @@ export default function FinanceLayout({ routes }) {
   }, [performClose]);
 
   const closeOne = useCallback((key) => closeKeys([key]), [closeKeys]);
+
+  // Seret tab ke tab lain: tab yang diseret mengambil posisi tab tujuan. Dashboard tetap paling kiri.
+  const reorder = useCallback((fromKey, toKey) => {
+    setTabs((cur) => {
+      const a = cur.findIndex((t) => t.key === fromKey);
+      const b = cur.findIndex((t) => t.key === toKey);
+      if (a < 0 || b < 0 || a === b || isPinned(fromKey) || isPinned(toKey)) return cur;
+      const next = [...cur];
+      const [m] = next.splice(a, 1);
+      next.splice(b, 0, m);
+      return next;
+    });
+  }, []);
+
+  // Tombol kembali: mundur satu langkah riwayat (bukan langsung ke Beranda)
+  const canGoBack = (window.history.state?.idx ?? 0) > 0;
+  const goBack = useCallback(() => {
+    if ((window.history.state?.idx ?? 0) > 0) navRef.current(-1);
+    else navRef.current("/");
+  }, []);
 
   // Pintasan: Alt+W tutup tab, Alt+←/→ pindah tab
   useEffect(() => {
@@ -801,24 +642,20 @@ export default function FinanceLayout({ routes }) {
   }, [activeKey]);
 
   const group = findGroup(pathname);
-  const hasSidebar = Boolean(group);
+  // Menu samping diganti hamburger yang membuka ke kanan. Anak menu (mis. Pengaturan Umum) dibuat sejajar.
+  const navItems = useMemo(
+    () => (group ? group.items.flatMap((it) => (it.children ? it.children : [it])).map((it) => ({ id: it.to, label: it.label, icon: it.icon, hint: it.description })) : []),
+    [group]
+  );
+  const navActive = useMemo(() => {
+    const bare = pathname.replace(/\/+$/, "");
+    return navItems.find((i) => i.id === bare)?.id || navItems.filter((i) => bare.startsWith(`${i.id}/`)).sort((a, b) => b.id.length - a.id.length)[0]?.id || null;
+  }, [navItems, pathname]);
 
-  // Keyboard: Escape to close drawer
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === "Escape") setMobileOpen(false);
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, []);
-
-  // Body scroll lock
-  useEffect(() => {
-    document.body.style.overflow = mobileOpen ? "hidden" : "";
-    return () => {
-      document.body.style.overflow = "";
-    };
-  }, [mobileOpen]);
+  const subNav = useMemo(
+    () => (navItems.length > 0 && group ? <HamburgerNav items={navItems} value={navActive} onSelect={(to) => navigate(to)} label={group.label} /> : null),
+    [navItems, navActive, group, navigate]
+  );
 
   // Set page title
   useEffect(() => {
@@ -829,87 +666,20 @@ export default function FinanceLayout({ routes }) {
 
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-800 antialiased font-sans">
-      {hasSidebar && (
-        <aside
-          className={cn(
-            "sticky top-0 hidden h-screen shrink-0 border-r border-slate-200 bg-white transition-[width] duration-300 ease-in-out lg:flex lg:flex-col print:!hidden",
-            desktopCollapsed ? "w-20" : "w-64"
-          )}
-        >
-          <Sidebar group={group} collapsed={desktopCollapsed} />
-        </aside>
-      )}
-
-      {/* ── Mobile Drawer (Backdrop + Slide-over) ─────────────────────────── */}
-      {hasSidebar && mobileOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden">
-          <div
-            className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity duration-300"
-            onClick={() => setMobileOpen(false)}
-            aria-hidden="true"
-          />
-          <div
-            ref={drawerRef}
-            className="fixed inset-y-0 left-0 w-72 max-w-[85vw] bg-white shadow-2xl transition-transform duration-300 ease-in-out"
-            role="dialog"
-            aria-modal="true"
-          >
-            <Sidebar group={group} collapsed={false} onClose={() => setMobileOpen(false)} />
-          </div>
-        </div>
-      )}
-
       {/* ── Main Content Area ────────────────────────────────────────────── */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Top bar */}
-        <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md sm:px-6 print:hidden">
-          <div className="flex items-center gap-3">
-            {!hasSidebar && (
-              <button
-                type="button"
-                onClick={() => navigate("/")}
-                className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-200 px-3 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
-              >
-                <HiOutlineArrowLeft className="h-4 w-4" />
-                <span className="hidden sm:inline">Beranda</span>
-              </button>
-            )}
-            {/* Mobile hamburger */}
-            <button
-              type="button"
-              onClick={() => setMobileOpen(true)}
-              className={cn("flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition lg:hidden", !hasSidebar && "!hidden")}
-              aria-label="Buka menu navigasi"
-            >
-              <HiOutlineBars3 className="h-5 w-5" />
-            </button>
-
-            {/* Desktop toggle collapse */}
-            <button
-              type="button"
-              onClick={() => setCollapsed((v) => !v)}
-              className={cn("hidden h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition", hasSidebar && "lg:flex")}
-              aria-label={desktopCollapsed ? "Buka sidebar" : "Tutup sidebar"}
-              title={desktopCollapsed ? "Perlebar menu" : "Ciutkan menu"}
-            >
-              <HiOutlineBars3 className="h-4 w-4" />
-            </button>
-
-            <ActiveMenuTitle />
-          </div>
-
-          <UserMenu />
-        </header>
-
-        <TabBar tabs={tabs} activeKey={activeKey} dirty={dirty} onActivate={activate} onClose={closeOne} onCloseMany={closeKeys} />
+        <TabBar tabs={tabs} activeKey={activeKey} dirty={dirty} onActivate={activate} onClose={closeOne} onCloseMany={closeKeys} onReorder={reorder} canGoBack={canGoBack} onBack={goBack} onHome={() => navigate("/")} trailing={<UserMenu />} />
 
         {/* Halaman tiap tab: yang tidak aktif disembunyikan, bukan dibuang */}
         <main className="flex-1">
-          {tabs.filter((t) => mounted.has(t.key)).map((t) => (
-            <div key={t.key} hidden={t.key !== activeKey} role="tabpanel">
-              <TabView routes={routes} tab={t} setDirty={setDirty} closeTab={closeOne} />
-            </div>
-          ))}
+          {/* Hamburger sub-menu ditaruh PageHeader di sisi kiri kartu alat (di bawah judul), sejajar dengan filter */}
+          <SubNavContext.Provider value={subNav}>
+            {tabs.filter((t) => mounted.has(t.key)).map((t) => (
+              <div key={t.key} hidden={t.key !== activeKey} role="tabpanel">
+                <TabView routes={routes} tab={t} setDirty={setDirty} closeTab={closeOne} />
+              </div>
+            ))}
+          </SubNavContext.Provider>
         </main>
       </div>
 
