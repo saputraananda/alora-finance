@@ -159,7 +159,7 @@ export default function ImportMutasi({ onDone }) {
           <li>File asli diarsipkan di server, nomor baris Excel tersimpan di tiap transaksi. Kategori Payment baru dipilih saat Cocokkan.</li>
         </ul>
         <div className="mt-4 flex gap-2">
-          <button type="button" onClick={onDone} className="rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-bold text-white hover:bg-emerald-700">Lihat di tab Bank</button>
+          <button type="button" onClick={onDone} className="rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-bold text-white hover:bg-emerald-700">Tutup & lihat mutasi</button>
           <button type="button" onClick={reset} className="rounded-xl border border-emerald-300 bg-white px-5 py-2.5 text-xs font-bold text-emerald-800 hover:bg-emerald-50">Import file lain</button>
         </div>
       </div>

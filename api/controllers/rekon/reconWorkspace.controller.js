@@ -1,4 +1,5 @@
 import { pool, mainPool, myWaschenPool, getOutlets } from "../../db/pool.js";
+import { employeeNames } from "../pos/nota.controller.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // REKONSILIASI TRANSAKSI — ruang kerja dua panel
@@ -11,6 +12,10 @@ import { pool, mainPool, myWaschenPool, getOutlets } from "../../db/pool.js";
 // ════════════════════════════════════════════════════════════════════════════
 
 const TOL = 1; // toleransi pembulatan (Rp)
+
+// Pencocokan yang masih berlaku DAN semua mutasi banknya masih ada. Bila mutasi bank dihapus/diganti saat impor ulang,
+// pencocokannya menjadi "yatim" (sisi kiri terlihat Matched tanpa pasangan di kanan) — yatim diabaikan agar baris kiri kembali terbuka.
+export const ACTIVE_MATCH = `m.undone_at IS NULL AND NOT EXISTS (SELECT 1 FROM tr_recon_match_item xb LEFT JOIN tr_bank_statement xs ON xs.id = CAST(xb.ref_key AS UNSIGNED) WHERE xb.match_id = m.id AND xb.side = 'BANK' AND xs.id IS NULL)`;
 const round2 = (n) => Math.round(Number(n) * 100) / 100;
 const near = (a, b) => Math.abs(a - b) <= TOL;
 const addDays = (d, n) => {
@@ -81,15 +86,22 @@ export async function buildInternal({ from, to, outletId = null, bankAccountId =
   // Jurnal penerimaan/pengeluaran pada akun bank rekening ini. Jurnal POS & Rekonsiliasi dikecualikan (sudah terwakili POS),
   // begitu juga baris yang sudah dicocokkan lewat pencocokan jurnal lama.
   if (bankAccountId) {
-    const [[bank]] = await pool.query(`SELECT account_id, outlet_id FROM mst_bank_account WHERE id = ?`, [bankAccountId]).then(([r]) => [r.length ? r : [null]]);
-    if (bank?.account_id) {
+    let accountIds = [];
+    if (bankAccountId === "ALL") {
+      const [ar] = await pool.query(`SELECT DISTINCT account_id FROM mst_bank_account WHERE is_active = 1 AND account_id IS NOT NULL`);
+      accountIds = ar.map((x) => Number(x.account_id));
+    } else {
+      const [[one]] = await pool.query(`SELECT account_id FROM mst_bank_account WHERE id = ?`, [bankAccountId]).then(([r]) => [r.length ? r : [null]]);
+      if (one?.account_id) accountIds = [Number(one.account_id)];
+    }
+    if (accountIds.length) {
       const [jr] = await pool.query(
         `SELECT jl.id, je.entry_no, DATE_FORMAT(je.entry_date,'%Y-%m-%d') AS d, je.description, jl.memo, jl.debit, jl.credit, jl.outlet_id, je.source_type
          FROM tr_journal_lines jl JOIN tr_journal_entries je ON je.id = jl.entry_id
          LEFT JOIN tr_bank_match m ON m.journal_line_id = jl.id
-         WHERE je.status IN ('POSTED','REVERSED') AND jl.account_id = ? AND m.journal_line_id IS NULL
+         WHERE je.status IN ('POSTED','REVERSED') AND jl.account_id IN (?) AND m.journal_line_id IS NULL
            AND je.source_type NOT IN ('POS','REKONSILIASI','SALDO_AWAL') AND je.entry_date BETWEEN ? AND ?${outletId ? " AND jl.outlet_id = ?" : ""}`,
-        outletId ? [bank.account_id, from, to, outletId] : [bank.account_id, from, to]
+        outletId ? [accountIds, from, to, outletId] : [accountIds, from, to]
       );
       jr.forEach((j) => {
         const out = Number(j.credit) > 0;
@@ -107,8 +119,10 @@ export async function buildInternal({ from, to, outletId = null, bankAccountId =
 // ── Pemakaian (pencocokan aktif) ───────────────────────────────────────────
 async function loadUsage(conn = pool) {
   const [rows] = await conn.query(
-    `SELECT i.side, i.ref_type, i.ref_key, i.match_id, i.amount, i.counter_amount, i.category_code, i.category_label, m.status, m.difference, m.explanation, m.bank_account_id
-     FROM tr_recon_match_item i JOIN tr_recon_match m ON m.id = i.match_id AND m.undone_at IS NULL`
+    `SELECT i.side, i.ref_type, i.ref_key, i.match_id, i.amount, i.counter_amount, i.category_code, i.category_label, m.status, m.difference, m.explanation, m.bank_account_id,
+            (gj.status = 'POSTED') AS on_gl
+     FROM tr_recon_match_item i JOIN tr_recon_match m ON m.id = i.match_id AND ${ACTIVE_MATCH}
+     LEFT JOIN tr_journal_entries gj ON gj.id = m.gl_journal_id`
   );
   const map = new Map();
   rows.forEach((r) => {
@@ -117,6 +131,7 @@ async function loadUsage(conn = pool) {
     u.used = round2(u.used + Number(r.amount));
     u.counter = round2(u.counter + Number(r.counter_amount));
     u.matches.push(r.match_id);
+    if (Number(r.on_gl) === 1) u.gl = true;
     if (r.category_label) u.category_label = r.category_label;
     if (r.status === "DIFF") {
       u.diff = true;
@@ -129,8 +144,9 @@ async function loadUsage(conn = pool) {
 
 function internalStatus(it, u, approvedDays) {
   if (u && u.used >= it.amount - TOL) {
-    if (u.diff) return u.explained ? "Explained" : "Difference";
-    if ((it.ref_type === "POS_CASH" || it.ref_type === "POS_ONLINE") && approvedDays.has(`${it.outlet_id}|${it.date}`)) return "Reviewed";
+    if (u.gl) return "Reviewed";
+    if (u.diff) return "Difference";
+    if ((it.ref_type === "POS_CASH" || it.ref_type === "POS_ONLINE") && approvedDays.has(`${it.outlet_id}|${it.date}|${it.ref_type === "POS_CASH" ? "TUNAI" : it.method}`)) return "Reviewed";
     return "Matched";
   }
   if (u && u.used > 0) return "Partial";
@@ -140,14 +156,18 @@ function internalStatus(it, u, approvedDays) {
 
 function bankStatus(abs, u, legacy) {
   if (legacy) return "Matched";
-  if (u && u.used >= abs - TOL) return u.diff ? (u.explained ? "Explained" : "Difference") : "Matched";
+  if (u && u.used >= abs - TOL) return u.diff ? "Difference" : "Matched";
   if (u && u.used > 0) return "Partial";
   return "Unmatched";
 }
 
+// Kunci "outlet|tanggal|metode" untuk metode yang sudah ditransfer ke GL (hari terkunci penuh lama = semua metode)
 async function approvedDaySet(from, to) {
   const [rows] = await pool.query(`SELECT outlet_id, DATE_FORMAT(rec_date,'%Y-%m-%d') AS d FROM tr_recon_daily WHERE status = 'APPROVED' AND rec_date BETWEEN ? AND ?`, [from, to]);
-  return new Set(rows.map((r) => `${r.outlet_id}|${r.d}`));
+  const [mrows] = await pool.query(`SELECT outlet_id, DATE_FORMAT(rec_date,'%Y-%m-%d') AS d, method FROM tr_recon_daily_method WHERE rec_date BETWEEN ? AND ?`, [from, to]).catch(() => [[]]);
+  const set = new Set(mrows.map((r) => `${r.outlet_id}|${r.d}|${r.method}`));
+  rows.forEach((r) => ["TUNAI", "QRIS", "EDC"].forEach((m) => set.add(`${r.outlet_id}|${r.d}|${m}`)));
+  return set;
 }
 
 const range = (q) => {
@@ -270,39 +290,75 @@ export async function getWorkspace(req, res) {
     const bankId = Number(req.query.bank_account_id) || null;
     const outletId = req.query.outlet ? Number(req.query.outlet) : null;
     const [banks] = await pool.query(`SELECT id, bank_name, account_no, holder, outlet_id FROM mst_bank_account WHERE is_active = 1 ORDER BY id`);
-    const bank = banks.find((b) => b.id === bankId) || banks[0] || null;
+    const allBanks = req.query.bank_account_id === "ALL"; // "Semua rekening": mutasi dari semua rekening aktif ditampilkan sekaligus
+    const bank = allBanks ? null : banks.find((b) => b.id === bankId) || banks[0] || null;
+    const bankLabel = new Map(banks.map((b) => [b.id, `${b.bank_name} ${b.account_no}`]));
     const [usage, approved] = await Promise.all([loadUsage(), approvedDaySet(addDays(from, -1), to)]);
 
+    // Jenis selisih tiap pencocokan DIFF: BANK_CHARGE (MDR / biaya bank), PIUTANG, DEPOSIT, PELUNASAN, atau null (belum dialokasi).
+    // Pencocokan lama QRIS/EDC yang sudah dijelaskan tanpa alokasi dianggap Bank Charge (sama seperti perlakuan jurnalnya).
+    const [diffRows] = await pool.query(
+      `SELECT m.id, m.difference, m.alloc_type, m.explanation,
+              (SELECT COUNT(*) FROM tr_recon_match_item i WHERE i.match_id = m.id AND i.side = 'INTERNAL') AS n_int,
+              (SELECT COUNT(*) FROM tr_recon_match_item i WHERE i.match_id = m.id AND i.side = 'INTERNAL' AND i.ref_type = 'POS_ONLINE') AS n_online
+       FROM tr_recon_match m WHERE m.status = 'DIFF' AND ${ACTIVE_MATCH}`
+    );
+    const diffInfo = new Map(diffRows.map((m) => [Number(m.id), {
+      type: m.alloc_type || (m.explanation && Number(m.n_int) > 0 && Number(m.n_int) === Number(m.n_online) && Number(m.difference) > 0 ? "BANK_CHARGE" : null),
+      amount: Math.abs(Number(m.difference) || 0),
+    }]));
+    const diffTypeOf = (ids) => { const f = (ids || []).find((id) => diffInfo.has(id)); return f ? diffInfo.get(f).type : null; };
+
     // Internal
-    const internalAll = await buildInternal({ from, to, outletId, bankAccountId: bank?.id });
+    const internalAll = await buildInternal({ from, to, outletId, bankAccountId: allBanks ? "ALL" : bank?.id });
     const internal = internalAll.map((it) => {
       const u = usage.get(`${it.ref_type}:${it.ref_key}`);
       const status = internalStatus(it, u, approved);
-      return { ...it, used: u?.used || 0, remaining: round2(Math.max(0, it.amount - (u?.used || 0))), status, matchable: true, match_ids: u?.matches || [], category: u?.category_label || null };
+      return { ...it, used: u?.used || 0, remaining: round2(Math.max(0, it.amount - (u?.used || 0))), status, resolved: status === "Difference" && Boolean(u?.explained), alloc_type: status === "Difference" ? diffTypeOf(u?.matches) : null, matchable: true, match_ids: u?.matches || [], category: u?.category_label || null };
     });
+
+    // Pasangan bank untuk baris internal yang sudah dicocokkan — termasuk yang ada di REKENING LAIN (panel kanan hanya menampilkan rekening terpilih)
+    const pairsBy = new Map();
+    const allMatchIds = [...new Set(internal.flatMap((x) => x.match_ids))];
+    if (allMatchIds.length) {
+      const [pr] = await pool.query(
+        `SELECT i.match_id, CAST(i.ref_key AS UNSIGNED) AS sid, i.amount, s.bank_account_id, ba.bank_name, ba.account_no, DATE_FORMAT(s.trx_date, '%Y-%m-%d') AS d, mt.recon_code
+         FROM tr_recon_match_item i JOIN tr_recon_match m ON m.id = i.match_id AND ${ACTIVE_MATCH}
+         JOIN tr_bank_statement s ON s.id = CAST(i.ref_key AS UNSIGNED) JOIN mst_bank_account ba ON ba.id = s.bank_account_id
+         LEFT JOIN tr_bank_statement_meta mt ON mt.statement_id = s.id
+         WHERE i.side = 'BANK' AND i.match_id IN (?)`,
+        [allMatchIds]
+      );
+      pr.forEach((p) => {
+        const list = pairsBy.get(Number(p.match_id)) || [];
+        list.push({ match_id: Number(p.match_id), statement_id: Number(p.sid), bank_account_id: Number(p.bank_account_id), bank_label: `${p.bank_name} ${p.account_no}`, recon_code: p.recon_code || null, date: p.d, amount: round2(p.amount), other_bank: bank ? Number(p.bank_account_id) !== bank.id : false });
+        pairsBy.set(Number(p.match_id), list);
+      });
+    }
+    internal.forEach((x) => { x.pairs = x.match_ids.flatMap((id) => pairsBy.get(id) || []); });
 
     // Bank
     let bankRows = [];
-    if (bank) {
+    if ((bank || allBanks) && banks.length) {
       const [stmts] = await pool.query(
-        `SELECT s.id, DATE_FORMAT(s.trx_date,'%Y-%m-%d') AS date, s.description, s.amount, s.balance,
+        `SELECT s.id, s.bank_account_id, DATE_FORMAT(s.trx_date,'%Y-%m-%d') AS date, s.description, s.amount, s.balance,
                 m.recon_code, m.bank_code, m.direction, m.source_recon_code, m.source_payment_category, m.description_full, m.excel_row, m.import_file_id,
                 (SELECT COUNT(*) FROM tr_bank_match bm WHERE bm.statement_id = s.id) AS legacy
          FROM tr_bank_statement s LEFT JOIN tr_bank_statement_meta m ON m.statement_id = s.id
-         WHERE s.bank_account_id = ? AND s.trx_date BETWEEN ? AND ? ORDER BY s.trx_date, s.id`,
-        [bank.id, from, to]
+         WHERE s.bank_account_id IN (?) AND s.trx_date BETWEEN ? AND ? ORDER BY s.trx_date, s.id`,
+        [allBanks ? banks.map((b) => b.id) : [bank.id], from, to]
       );
       bankRows = stmts.map((s) => {
         const u = usage.get(`BANK:${s.id}`);
         const abs = Math.abs(Number(s.amount));
         const status = bankStatus(abs, u, Number(s.legacy) > 0);
         return {
-          id: s.id, date: s.date, description: s.description, description_full: s.description_full || null, amount: round2(s.amount), balance: s.balance == null ? null : round2(s.balance),
+          id: s.id, bank_account_id: Number(s.bank_account_id), bank_label: bankLabel.get(Number(s.bank_account_id)) || null, date: s.date, description: s.description, description_full: s.description_full || null, amount: round2(s.amount), balance: s.balance == null ? null : round2(s.balance),
           debit: Number(s.amount) < 0 ? abs : 0, credit: Number(s.amount) > 0 ? abs : 0,
           recon_code: s.recon_code || null, bank_code: s.bank_code || null, direction: s.direction || null,
           source_recon_code: s.source_recon_code || null, source_payment_category: s.source_payment_category || null,
           excel_row: s.excel_row || null, import_file_id: s.import_file_id || null,
-          used: u?.used || 0, remaining: round2(Math.max(0, abs - (u?.used || 0))), status, legacy_matched: Number(s.legacy) > 0,
+          used: u?.used || 0, remaining: round2(Math.max(0, abs - (u?.used || 0))), status, resolved: status === "Difference" && Boolean(u?.explained), alloc_type: status === "Difference" ? diffTypeOf(u?.matches) : null, legacy_matched: Number(s.legacy) > 0,
           payment_category: u?.category_label || null, match_ids: u?.matches || [],
         };
       });
@@ -316,37 +372,156 @@ export async function getWorkspace(req, res) {
       if (c.length) suggestions[b.id] = c;
     });
 
-    const method = req.query.method || "";
+    const methods = String(req.query.method || "").split(",").map((x) => x.trim()).filter(Boolean); // boleh lebih dari satu
     const statusF = req.query.status || "belum";
+    const allocF = ["BANK_CHARGE", "PIUTANG", "OTHER"].includes(req.query.alloc) ? req.query.alloc : "";
     const q = req.query.q || "";
-    const done = (s) => ["Matched", "Reviewed", "Explained"].includes(s);
-    const pass = (s, side) => (statusF === "all" ? true : statusF === "belum" ? !done(s) : statusF === "Matched" ? done(s) : side === "BANK" ? !done(s) : s === statusF);
-    const iFiltered = internal.filter((x) => (!method || x.method === method) && pass(x.status, "INTERNAL") && matchText(x, q));
-    const bFiltered = bankRows.filter((x) => pass(x.status, "BANK") && (!q || `${x.description} ${x.recon_code || ""} ${x.amount}`.toLowerCase().includes(String(q).trim().toLowerCase())));
+    // Selesai = Matched/Reviewed, atau Difference yang sudah dijelaskan/dialokasikan (tidak lagi dianggap "belum selesai")
+    const done = (x) => ["Matched", "Reviewed"].includes(x.status) || (x.status === "Difference" && x.resolved);
+    const pass = (x, side) => {
+      if (statusF === "all") return true;
+      if (statusF === "belum") return !done(x);
+      if (statusF === "Matched") return x.status === "Matched" || x.status === "Reviewed";
+      if (statusF === "Difference") {
+        if (x.status !== "Difference") return false;
+        if (!allocF) return true;
+        return allocF === "OTHER" ? !["BANK_CHARGE", "PIUTANG"].includes(x.alloc_type) : x.alloc_type === allocF;
+      }
+      return side === "BANK" ? !done(x) : x.status === statusF;
+    };
+    const iFiltered = internal.filter((x) => (!methods.length || methods.includes(x.method)) && pass(x, "INTERNAL") && matchText(x, q));
+    const bFiltered = bankRows.filter((x) => pass(x, "BANK") && (!q || `${x.description} ${x.recon_code || ""} ${x.amount}`.toLowerCase().includes(String(q).trim().toLowerCase())));
 
     const count = (arr, s) => arr.filter((x) => x.status === s).length;
+    // Rincian selisih (per PASANG) pada periode ini: bank charge, piutang, lainnya (deposit / pelunasan / belum dialokasi)
+    const matchIds = [...new Set([...internal, ...bankRows].flatMap((x) => x.match_ids || []))].filter((id) => diffInfo.has(id));
+    const alloc = { bank_charge: 0, piutang: 0, belum_dialokasi: 0, deposit: 0, pelunasan: 0 };
+    const pairs = { bank_charge: 0, piutang: 0, lainnya: 0 };
+    matchIds.forEach((id) => {
+      const m = diffInfo.get(id);
+      if (m.type === "BANK_CHARGE") { alloc.bank_charge += m.amount; pairs.bank_charge += 1; }
+      else if (m.type === "PIUTANG") { alloc.piutang += m.amount; pairs.piutang += 1; }
+      else {
+        pairs.lainnya += 1;
+        if (m.type === "DEPOSIT") alloc.deposit += m.amount;
+        else if (m.type === "PELUNASAN") alloc.pelunasan += m.amount;
+        else alloc.belum_dialokasi += m.amount;
+      }
+    });
+    Object.keys(alloc).forEach((k) => { alloc[k] = round2(alloc[k]); });
+    const diffPairs = matchIds.length; // satu pasang kiri-kanan dihitung 1
     return res.json({
       period: { from, to },
       outlets: (await getOutlets()).map((o) => ({ id: o.id, name: o.name })),
       banks,
       bank,
+      all_banks: allBanks,
       internal: iFiltered.slice(0, 1500),
       internal_total: iFiltered.length,
       bank_rows: bFiltered.slice(0, 1500),
       bank_total: bFiltered.length,
       suggestions,
       summary: {
-        belum: internal.filter((x) => !done(x.status)).length + bankRows.filter((x) => !done(x.status)).length,
+        belum: internal.filter((x) => !done(x)).length + bankRows.filter((x) => !done(x)).length,
         pending_bank: count(internal, "PendingBank"),
-        difference: count(internal, "Difference") + count(bankRows, "Difference"),
-        matched: internal.filter((x) => done(x.status)).length,
+        difference: diffPairs,
+        matched: internal.filter((x) => x.status === "Matched" || x.status === "Reviewed").length,
         internal_count: internal.length,
-        bank_unmatched: bankRows.filter((x) => !done(x.status)).length,
+        reconciliated: internal.filter((x) => done(x)).length,
+        diff_alloc: alloc,
+        diff_pairs: pairs,
+        bank_unmatched: bankRows.filter((x) => !done(x)).length,
       },
     });
   } catch (err) {
     console.error("[getWorkspace]", err);
     return res.status(500).json({ message: "Gagal memuat Rekonsiliasi Transaksi", error: err.message });
+  }
+}
+
+// Kekurangan (alokasi PIUTANG) yang belum dilunasi. remaining = selisih awal − pelunasan yang sudah dicocokkan.
+export async function loadOpenPiutang(conn = pool) {
+  const [rows] = await conn.query(
+    `SELECT m.id AS match_id, ABS(m.difference) AS amount, m.alloc_party AS party, m.explanation, DATE_FORMAT(m.created_at, '%Y-%m-%d') AS created,
+            (SELECT COALESCE(SUM(ABS(r.difference)), 0) FROM tr_recon_match r WHERE r.alloc_ref_match_id = m.id AND r.alloc_type = 'PELUNASAN' AND r.undone_at IS NULL) AS settled,
+            (SELECT MIN(i.outlet_id) FROM tr_recon_match_item i WHERE i.match_id = m.id AND i.side = 'INTERNAL') AS outlet_id,
+            (SELECT MIN(i.ref_type) FROM tr_recon_match_item i WHERE i.match_id = m.id AND i.side = 'INTERNAL') AS ref_type
+     FROM tr_recon_match m WHERE m.alloc_type = 'PIUTANG' AND ${ACTIVE_MATCH} ORDER BY m.id`
+  );
+  return rows
+    .map((r) => ({ match_id: Number(r.match_id), amount: round2(r.amount), settled: round2(r.settled), remaining: round2(Number(r.amount) - Number(r.settled)), party: r.party, explanation: r.explanation, created: r.created, outlet_id: r.outlet_id ? Number(r.outlet_id) : null, ref_type: r.ref_type }))
+    .filter((r) => r.remaining > TOL);
+}
+
+// GET /rekon/workspace/open-piutang — pilihan "Kekurangan yang dilunasi" di dialog pencocokan
+export async function getOpenPiutang(req, res) {
+  try {
+    const outletId = Number(req.query?.outlet) || null;
+    const items = await loadOpenPiutang();
+    const om = await outletMap();
+    // Total terbuka per pihak, supaya terlihat berapa seluruh utang orang itu (bukan hanya satu kekurangan)
+    const perParty = new Map();
+    items.forEach((p) => { const k = String(p.party || "").trim().toLowerCase(); if (k) perParty.set(k, round2((perParty.get(k) || 0) + p.remaining)); });
+    return res.json({
+      items: items
+        .map((p) => ({ ...p, code: `PIU-${String(p.match_id).padStart(4, "0")}`, outlet_name: p.outlet_id ? om.get(p.outlet_id)?.name || null : null, same_outlet: Boolean(outletId && p.outlet_id === outletId), party_total: perParty.get(String(p.party || "").trim().toLowerCase()) || p.remaining }))
+        .sort((a, b) => Number(b.same_outlet) - Number(a.same_outlet) || a.match_id - b.match_id),
+    });
+  } catch (err) {
+    return res.status(500).json({ message: "Gagal memuat kekurangan terbuka", error: err.message });
+  }
+}
+
+// GET /rekon/workspace/parties?outlet= — nama kasir cabang (dari closing shift POS) untuk pilihan "Pihak piutang"
+export async function getParties(req, res) {
+  try {
+    const outletId = Number(req.query.outlet) || null;
+    const [rows] = await myWaschenPool.query(
+      `SELECT DISTINCT cashier_employee_id AS a, closed_by_employee_id AS b FROM tr_cashier_shift WHERE opened_at >= DATE_SUB(CURDATE(), INTERVAL 120 DAY)${outletId ? " AND outlet_id = ?" : ""}`,
+      outletId ? [outletId] : []
+    );
+    const names = await employeeNames(rows.flatMap((r) => [r.a, r.b]));
+    return res.json({ kasir: [...new Set(names.values())].sort((x, y) => x.localeCompare(y)) });
+  } catch (err) {
+    return res.status(500).json({ message: "Gagal memuat daftar kasir", error: err.message });
+  }
+}
+
+// GET /rekon/workspace/internal-detail?ref_type=&ref_key= — nota & bukti pembayaran di balik satu baris internal
+export async function getInternalDetail(req, res) {
+  try {
+    const { ref_type: type, ref_key: key } = req.query;
+    const base = String(process.env.POS_ASSET_BASE_URL || "").replace(/\/+$/, "");
+    const assetUrl = (p) => (!p ? null : /^https?:\/\//i.test(p) ? p : base ? `${base}${p.startsWith("/") ? "" : "/"}${p}` : null);
+    let rows = [];
+    if (type === "POS_TRF") {
+      [rows] = await myWaschenPool.query(
+        `SELECT l.id, t.id AS transaction_id, t.order_no, l.amount, l.payment_method, l.payment_proof_url, t.payment_proof_url AS nota_proof, DATE_FORMAT(l.created_at, '%H:%i') AS jam, c.name AS customer
+         FROM tr_payment_log l JOIN tr_transaction t ON t.id = l.transaction_id LEFT JOIN mst_customer c ON c.id = t.customer_id WHERE l.id = ?`,
+        [Number(key)]
+      );
+    } else if (type === "POS_CASH" || type === "POS_ONLINE") {
+      const [oid, d, m] = String(key).split("|");
+      const methodSql = type === "POS_CASH" ? "l.payment_method LIKE 'Tunai%'" : m === "QRIS" ? "l.payment_method LIKE 'QRIS%'" : "l.payment_method LIKE 'EDC%'";
+      [rows] = await myWaschenPool.query(
+        `SELECT l.id, t.id AS transaction_id, t.order_no, l.amount, l.payment_method, l.payment_proof_url, t.payment_proof_url AS nota_proof, DATE_FORMAT(l.created_at, '%H:%i') AS jam, c.name AS customer
+         FROM tr_payment_log l JOIN tr_transaction t ON t.id = l.transaction_id LEFT JOIN mst_customer c ON c.id = t.customer_id
+         WHERE t.outlet_id = ? AND ${LOG_WHERE} AND ${methodSql} ORDER BY l.created_at LIMIT 300`,
+        [Number(oid), d, d]
+      );
+    } else {
+      return res.json({ payments: [], truncated: false });
+    }
+    return res.json({
+      payments: rows.map((r) => ({
+        id: Number(r.id), transaction_id: Number(r.transaction_id), order_no: r.order_no, amount: round2(r.amount), method: r.payment_method, time: r.jam, customer: r.customer || null,
+        proof: assetUrl(r.payment_proof_url || r.nota_proof), has_proof: Boolean(r.payment_proof_url || r.nota_proof),
+      })),
+      truncated: rows.length >= 300,
+    });
+  } catch (err) {
+    console.error("[getInternalDetail]", err);
+    return res.status(500).json({ message: "Gagal memuat rincian nota", error: err.message });
   }
 }
 
@@ -439,9 +614,32 @@ export async function createMatch(req, res) {
     const uid = req.user?.id || null;
     const explanation = status === "DIFF" ? String(req.body?.explanation || "").trim().slice(0, 500) : "";
 
+    // Alokasi selisih (hanya uang masuk). Bank kurang → Bank Charge / Piutang. Bank lebih → Deposit / Pelunasan kekurangan sebelumnya.
+    let allocType = null;
+    let allocParty = null;
+    let allocRef = null;
+    const al = req.body?.allocation;
+    if (status === "DIFF" && al && direction === "CR") {
+      const gap = round2(totalI - totalB); // > 0: uang bank kurang
+      const allowed = gap > 0 ? ["BANK_CHARGE", "PIUTANG"] : ["DEPOSIT", "PELUNASAN"];
+      if (!allowed.includes(al.type)) return res.status(422).json({ message: gap > 0 ? "Selisih kurang hanya bisa dialokasikan ke Bank Charge atau Piutang." : "Selisih lebih hanya bisa dialokasikan ke Deposit atau Pelunasan kekurangan sebelumnya." });
+      if (explanation.length < 3) return res.status(422).json({ message: "Remark selisih wajib diisi." });
+      allocType = al.type;
+      if (allocType === "PIUTANG") {
+        allocParty = String(al.party || "").trim().slice(0, 120);
+        if (!allocParty) return res.status(422).json({ message: "Pihak piutang wajib diisi (kasir atau pelanggan)." });
+      }
+      if (allocType === "PELUNASAN") {
+        allocRef = Number(al.settles_match_id) || null;
+        const open = (await loadOpenPiutang(conn)).find((p) => p.match_id === allocRef);
+        if (!open) return res.status(422).json({ message: "Pilih kekurangan sebelumnya yang dilunasi." });
+        if (Math.abs(gap) > open.remaining + TOL) return res.status(422).json({ message: `Kelebihan Rp ${Math.abs(gap).toLocaleString("id-ID")} lebih besar dari sisa kekurangan Rp ${open.remaining.toLocaleString("id-ID")}. Alokasikan sisanya ke Deposit lewat pencocokan terpisah.` });
+      }
+    }
+
     await conn.beginTransaction();
-    const [mh] = await conn.query(`INSERT INTO tr_recon_match (bank_account_id, status, difference, created_by) VALUES (?, ?, ?, ?)`, [
-      bankId, status, status === "DIFF" ? round2(totalI - totalB) : 0, uid,
+    const [mh] = await conn.query(`INSERT INTO tr_recon_match (bank_account_id, status, difference, created_by, alloc_type, alloc_party, alloc_ref_match_id) VALUES (?, ?, ?, ?, ?, ?, ?)`, [
+      bankId, status, status === "DIFF" ? round2(totalI - totalB) : 0, uid, allocType, allocParty, allocRef,
     ]);
     if (explanation) await conn.query(`UPDATE tr_recon_match SET explanation = ?, explained_by = ?, explained_at = NOW() WHERE id = ?`, [explanation, uid, mh.insertId]);
     for (let i = 0; i < intItems.length; i++) {
@@ -471,6 +669,47 @@ export async function createMatch(req, res) {
   }
 }
 
+// Alasan pencocokan tidak boleh dibatalkan: hari terkait sudah ditransfer ke General Ledger (dikunci di Rekonsiliasi harian)
+async function lockedReason(matchId) {
+  const [[gl]] = await pool.query(`SELECT je.entry_no FROM tr_recon_match m JOIN tr_journal_entries je ON je.id = m.gl_journal_id AND je.status = 'POSTED' WHERE m.id = ?`, [matchId]).then(([r]) => [r.length ? r : [null]]).catch(() => [[null]]);
+  if (gl) return `Sudah ditransfer ke General Ledger (${gl.entry_no}). Pencocokan tidak bisa dibatalkan.`;
+  const [its] = await pool.query(`SELECT ref_type, ref_key, outlet_id FROM tr_recon_match_item WHERE match_id = ? AND side = 'INTERNAL' AND ref_type IN ('POS_CASH','POS_ONLINE')`, [matchId]);
+  for (const it of its) {
+    const parts = String(it.ref_key).split("|"); // "cabang|tanggal" (tunai) atau "cabang|tanggal|metode" (QRIS/EDC)
+    const day = parts[1] || null;
+    const method = it.ref_type === "POS_CASH" ? "TUNAI" : parts[2];
+    if (!day || !it.outlet_id) continue;
+    const [[lk]] = await pool.query(`SELECT 1 AS x FROM tr_recon_daily WHERE outlet_id = ? AND rec_date = ? AND status = 'APPROVED'`, [it.outlet_id, day]).then(([r]) => [r.length ? r : [null]]);
+    const [[mk]] = await pool.query(`SELECT 1 AS x FROM tr_recon_daily_method WHERE outlet_id = ? AND rec_date = ? AND method = ?`, [it.outlet_id, day, method]).then(([r]) => [r.length ? r : [null]]).catch(() => [[null]]);
+    if (lk || mk) return "Metode terkait sudah ditransfer ke General Ledger. Pencocokan tidak bisa dibatalkan.";
+  }
+  return null;
+}
+
+// Mutasi bank dihapus → semua pencocokan yang memakainya ikut dibatalkan (transaksi internal kembali terbuka).
+// ids = id mutasi bank. Mengembalikan {ok, matches:[id], message}. Dipakai saat hapus mutasi dan untuk merapikan pencocokan yatim.
+export async function cancelMatchesOfStatements(ids, userId, reason = "mutasi bank dihapus") {
+  const list = (Array.isArray(ids) ? ids : [ids]).map(String);
+  if (!list.length) return { ok: true, matches: [] };
+  const [ms] = await pool.query(`SELECT DISTINCT m.id FROM tr_recon_match_item i JOIN tr_recon_match m ON m.id = i.match_id AND m.undone_at IS NULL WHERE i.side = 'BANK' AND i.ref_key IN (?)`, [list]);
+  const mids = ms.map((x) => Number(x.id));
+  for (const id of mids) {
+    const why = await lockedReason(id);
+    if (why) return { ok: false, matches: mids, message: `Pencocokan #${id}: ${why} Koreksi lewat jurnal balik di General Ledger.` };
+  }
+  for (const id of mids) {
+    await pool.query(`UPDATE tr_recon_match SET undone_by = ?, undone_at = NOW() WHERE id = ? AND undone_at IS NULL`, [userId || null, id]);
+    await pool.query(`INSERT INTO tr_recon_history (action, ref_type, ref_key, detail, user_id) VALUES ('UNMATCH', 'MATCH', ?, ?, ?)`, [String(id), `Pencocokan #${id} dibatalkan otomatis: ${reason} (data sumber tidak berubah)`, userId || null]);
+  }
+  return { ok: true, matches: mids };
+}
+
+// Pencocokan aktif yang mutasi banknya sudah tidak ada (sisa dari penghapusan sebelum aturan ini ada)
+export async function findOrphanMatches() {
+  const [r] = await pool.query(`SELECT m.id FROM tr_recon_match m WHERE m.undone_at IS NULL AND EXISTS (SELECT 1 FROM tr_recon_match_item xb LEFT JOIN tr_bank_statement xs ON xs.id = CAST(xb.ref_key AS UNSIGNED) WHERE xb.match_id = m.id AND xb.side = 'BANK' AND xs.id IS NULL)`);
+  return r.map((x) => Number(x.id));
+}
+
 // POST /rekon/workspace/unmatch {match_id}  — batalkan; data sumber tidak berubah
 export async function undoMatch(req, res) {
   try {
@@ -478,15 +717,8 @@ export async function undoMatch(req, res) {
     const [[m]] = await pool.query(`SELECT id, status, undone_at FROM tr_recon_match WHERE id = ?`, [id]).then(([r]) => [r.length ? r : [null]]);
     if (!m) return res.status(404).json({ message: "Pencocokan tidak ditemukan." });
     if (m.undone_at) return res.status(422).json({ message: "Pencocokan ini sudah dibatalkan." });
-    // Hari yang sudah disetujui/dikunci di Rekonsiliasi Harian tidak boleh diubah buktinya
-    const [its] = await pool.query(`SELECT ref_type, ref_key, outlet_id FROM tr_recon_match_item WHERE match_id = ? AND side = 'INTERNAL' AND ref_type IN ('POS_CASH','POS_ONLINE')`, [id]);
-    for (const it of its) {
-      const outlet = it.outlet_id;
-      const day = String(it.ref_key).split("|")[1] || null; // ref_key: "cabang|tanggal" atau "cabang|tanggal|metode"
-      if (!day || !outlet) continue;
-      const [[lk]] = await pool.query(`SELECT 1 AS x FROM tr_recon_daily WHERE outlet_id = ? AND rec_date = ? AND status = 'APPROVED'`, [outlet, day]).then(([r]) => [r.length ? r : [null]]);
-      if (lk) return res.status(422).json({ message: "Hari terkait sudah disetujui dan dikunci di Rekonsiliasi Harian. Pencocokan tidak bisa dibatalkan." });
-    }
+    const why = await lockedReason(id);
+    if (why) return res.status(422).json({ message: why });
     await pool.query(`UPDATE tr_recon_match SET undone_by = ?, undone_at = NOW() WHERE id = ?`, [req.user?.id || null, id]);
     await pool.query(`INSERT INTO tr_recon_history (action, ref_type, ref_key, detail, user_id) VALUES ('UNMATCH', 'MATCH', ?, ?, ?)`, [String(id), `Pencocokan #${id} dibatalkan (data sumber tidak berubah)`, req.user?.id || null]);
     return res.json({ message: "Pencocokan dibatalkan." });
@@ -495,7 +727,7 @@ export async function undoMatch(req, res) {
   }
 }
 
-// POST /rekon/workspace/explain {match_id, text} — jelaskan selisih (Difference → Explained)
+// POST /rekon/workspace/explain {match_id, text} — jelaskan selisih (tetap Difference, ditandai sudah dijelaskan)
 export async function explainMatch(req, res) {
   try {
     const id = Number(req.body?.match_id);
@@ -525,25 +757,48 @@ export async function getMatch(req, res) {
   }
 }
 
-// GET /rekon/workspace/history?action=&q=&limit=
+// GET /rekon/workspace/history?action=&q=&outlet=&from=&to=&limit=
 export async function getHistory(req, res) {
   try {
     const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 200));
     const conds = [];
     const params = [];
-    if (req.query.action) {
-      conds.push("action = ?");
-      params.push(String(req.query.action));
-    }
-    if (req.query.q) {
-      conds.push("(detail LIKE ? OR ref_key LIKE ?)");
-      params.push(`%${req.query.q}%`, `%${req.query.q}%`);
+    if (req.query.action) { conds.push("h.action = ?"); params.push(String(req.query.action)); }
+    if (req.query.q) { conds.push("(h.detail LIKE ? OR h.ref_key LIKE ?)"); params.push(`%${req.query.q}%`, `%${req.query.q}%`); }
+    if (isDate(req.query.from)) { conds.push("h.created_at >= ?"); params.push(req.query.from); }
+    if (isDate(req.query.to)) { conds.push("h.created_at < DATE_ADD(?, INTERVAL 1 DAY)"); params.push(req.query.to); }
+    const outletId = Number(req.query.outlet) || null;
+    if (outletId) {
+      conds.push(`(h.ref_type = 'MATCH' AND EXISTS (SELECT 1 FROM tr_recon_match_item i WHERE i.match_id = CAST(h.ref_key AS UNSIGNED) AND i.side = 'INTERNAL' AND i.outlet_id = ?))`);
+      params.push(outletId);
     }
     const [rows] = await pool.query(
-      `SELECT id, action, ref_type, ref_key, detail, user_id, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at
-       FROM tr_recon_history ${conds.length ? `WHERE ${conds.join(" AND ")}` : ""} ORDER BY id DESC LIMIT ?`,
+      `SELECT h.id, h.action, h.ref_type, h.ref_key, h.detail, h.user_id, DATE_FORMAT(h.created_at, '%Y-%m-%d %H:%i:%s') AS created_at
+       FROM tr_recon_history h ${conds.length ? `WHERE ${conds.join(" AND ")}` : ""} ORDER BY h.id DESC LIMIT ?`,
       [...params, limit]
     );
+    // Rekon Code mutasi bank + metode bayar internal (mengikuti nota) + cabang untuk baris pencocokan
+    const mids = [...new Set(rows.filter((r) => r.ref_type === "MATCH").map((r) => Number(r.ref_key)).filter(Boolean))];
+    const info = new Map();
+    if (mids.length) {
+      const [its] = await pool.query(
+        `SELECT i.match_id, i.side, i.ref_type, i.ref_key, i.outlet_id, m.recon_code, m.source_recon_code
+         FROM tr_recon_match_item i LEFT JOIN tr_bank_statement_meta m ON i.side = 'BANK' AND m.statement_id = CAST(i.ref_key AS UNSIGNED)
+         WHERE i.match_id IN (?)`,
+        [mids]
+      );
+      const om = await outletMap();
+      its.forEach((i) => {
+        const o = info.get(Number(i.match_id)) || { codes: new Set(), methods: new Set(), outlets: new Set() };
+        if (i.side === "BANK" && i.recon_code) o.codes.add(i.recon_code);
+        if (i.side === "INTERNAL") {
+          const m = i.ref_type === "POS_CASH" ? "Tunai" : i.ref_type === "POS_TRF" ? "Transfer" : i.ref_type === "POS_ONLINE" ? String(i.ref_key).split("|")[2] : i.ref_type === "JOURNAL" ? "Jurnal" : null;
+          if (m) o.methods.add(m);
+          if (i.outlet_id) o.outlets.add(om.get(Number(i.outlet_id))?.name || `Outlet #${i.outlet_id}`);
+        }
+        info.set(Number(i.match_id), o);
+      });
+    }
     const ids = [...new Set(rows.map((r) => r.user_id).filter(Boolean))];
     const names = new Map();
     if (ids.length) {
@@ -554,7 +809,18 @@ export async function getHistory(req, res) {
         /* nama pengguna opsional */
       }
     }
-    return res.json({ data: rows.map((r) => ({ ...r, user_name: names.get(Number(r.user_id)) || null })) });
+    return res.json({
+      data: rows.map((r) => {
+        const o = r.ref_type === "MATCH" ? info.get(Number(r.ref_key)) : null;
+        return {
+          ...r,
+          user_name: names.get(Number(r.user_id)) || null,
+          recon_code: o ? [...o.codes].join(", ") || null : null,
+          payment_category: o ? [...o.methods].join(", ") || null : null,
+          outlet_name: o ? [...o.outlets].join(", ") || null : null,
+        };
+      }),
+    });
   } catch (err) {
     return res.status(500).json({ message: "Gagal memuat riwayat", error: err.message });
   }

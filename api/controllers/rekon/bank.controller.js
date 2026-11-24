@@ -3,6 +3,7 @@ import multer from "multer";
 import ExcelJS from "exceljs";
 import { pool, safeQuery, getOutlets } from "../../db/pool.js";
 import { toFixed2 } from "../../utils/currencyHelpers.js";
+import { cancelMatchesOfStatements } from "./reconWorkspace.controller.js";
 import { dayLockMessage } from "../../utils/dayLock.js";
 import { cutoffRange, currentCutoffMonth } from "../dashboard/dashboard.controller.js";
 import { parseCsv, parseDate } from "../../utils/statementParse.js";
@@ -30,7 +31,7 @@ const addDays = (d, n) => {
 const dayDiff = (a, b) => Math.round((Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86400000);
 
 
-export const BANK_ROLES = { BEBAN_ADMIN_BANK: { label: "Beban Administrasi Bank", code: "5-1008" } };
+export const BANK_ROLES = { BEBAN_ADMIN_BANK: { label: "Beban Administrasi Bank", code: "6-1800" } };
 
 function periodOf(q) {
   const cur = currentCutoffMonth();
@@ -473,8 +474,12 @@ export async function deleteStatement(req, res) {
   try {
     const [[m]] = await pool.query(`SELECT COUNT(*) AS n FROM tr_bank_match WHERE statement_id = ?`, [req.params.id]).then(([r]) => [r]);
     if (m.n) return res.status(422).json({ message: "Batalkan pencocokan dulu sebelum menghapus mutasi." });
+    // Pencocokan baru (Rekonsiliasi transaksi) yang memakai mutasi ini ikut dibatalkan, supaya transaksi internal tidak tersisa "Matched" tanpa pasangan.
+    // Bila hari terkait sudah ditransfer ke General Ledger, penghapusan ditolak.
+    const c = await cancelMatchesOfStatements([req.params.id], req.user?.id || null);
+    if (!c.ok) return res.status(422).json({ message: c.message });
     await pool.query(`DELETE FROM tr_bank_statement WHERE id = ?`, [req.params.id]);
-    return res.json({ message: "Mutasi dihapus." });
+    return res.json({ message: c.matches.length ? `Mutasi dihapus. ${c.matches.length} pencocokan (#${c.matches.join(", #")}) ikut dibatalkan.` : "Mutasi dihapus." });
   } catch (err) {
     return res.status(500).json({ message: "Gagal menghapus mutasi", error: err.message });
   }

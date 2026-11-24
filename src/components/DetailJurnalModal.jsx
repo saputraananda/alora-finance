@@ -45,7 +45,7 @@ export const JOURNAL_STATUS = {
   REVERSED: { label: "Dibalik", cls: "bg-rose-50 text-rose-700 border-rose-200" },
 };
 
-const SOURCE_LABEL = { POS: "POS", MANUAL: "Manual", REKONSILIASI: "Rekonsiliasi", REKON_BANK: "Bank (biaya admin)", ALOKASI: "Alokasi biaya pusat", PENGAJUAN: "Pengajuan (Pembelian)" };
+const SOURCE_LABEL = { POS: "POS", MANUAL: "Manual", REKONSILIASI: "Rekonsiliasi", REKON_BANK: "Bank (biaya admin)", ALOKASI: "Alokasi biaya pusat", PENGAJUAN: "Pengajuan (Pembelian)", SETORAN_KASIR: "Setoran Kasir" };
 
 // ════════════════════════════════════════════════════════════════════════════
 // MODAL DETAIL JURNAL — lihat, ubah draft, ajukan, setujui/tolak, balik
@@ -212,7 +212,7 @@ export function DetailJurnalModal({ open, journalId, onClose, onReversed, onEdit
                   className="inline-flex items-center gap-1.5 rounded-lg border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-bold text-sky-700 transition hover:bg-sky-100"
                 >
                   <HiOutlineArrowTopRightOnSquare className="h-4 w-4" />
-                  {data.source_type === "POS" ? "Telusuri ke batch POS dan nota" : "Telusuri ke rekonsiliasi harian"}
+                  {data.source_type === "POS" ? "Telusuri ke batch POS dan nota" : "Telusuri ke hasil rekonsiliasi"}
                 </Link>
               )}
 

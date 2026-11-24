@@ -1,14 +1,14 @@
 import { createContext, useContext, useEffect } from "react";
 
 // Sub-halaman Rekonsiliasi: masing-masing dibuka sebagai tab sendiri (?tab=...).
-export const REKON_TAB_IDS = ["transaksi", "import", "harian", "riwayat", "bank"];
-export const REKON_LABEL = { transaksi: "Transaksi", import: "Import data", harian: "Harian", riwayat: "Riwayat", bank: "Jurnal bank" };
+export const REKON_TAB_IDS = ["transaksi", "harian", "riwayat", "bank"];
+export const REKON_LABEL = { transaksi: "Transaksi", harian: "Harian", riwayat: "Riwayat", bank: "Aktivitas Bank" };
 
 // Menentukan sub-halaman Rekonsiliasi dari query string (tautan lama ?tab=settlement/setoran → transaksi).
 export function rekonTabOf(search = "") {
   const p = new URLSearchParams(search);
   const raw = p.get("tab");
-  const mapped = raw === "settlement" || raw === "setoran" ? "transaksi" : raw;
+  const mapped = raw === "settlement" || raw === "setoran" || raw === "import" ? "transaksi" : raw; // Import data kini berupa modal di tab Transaksi
   if (REKON_TAB_IDS.includes(mapped)) return mapped;
   return p.get("date") ? "harian" : "transaksi";
 }
