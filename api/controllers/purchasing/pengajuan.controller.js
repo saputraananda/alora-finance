@@ -1,4 +1,5 @@
 import { mainPool, pool as alfiPool } from '../../db/pool.js';
+import { mstOutlet } from '../../utils/outletSource.js';
 import { isFinance, loadMe, financeGateOn } from '../../utils/pengajuanAccess.js';
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -22,7 +23,7 @@ export const AMOUNT_SQL = `COALESCE(NULLIF(pr.nominal_bayar, 0), pr.estimasi_har
 
 const OUTLET_SQL = `COALESCE((SELECT GROUP_CONCAT(DISTINCT mo.full_name ORDER BY mo.full_name SEPARATOR ', ')
                       FROM tr_purchase_request_scope prs
-                      JOIN mst_outlet mo ON mo.id = prs.outlet_id
+                      JOIN ${mstOutlet()} mo ON mo.id = prs.outlet_id
                       WHERE prs.pr_id = pr.pr_id), o.full_name)`;
 
 const CLASS_SQL = `(SELECT GROUP_CONCAT(mc.classification_name ORDER BY mc.classification_name SEPARATOR ', ')
@@ -36,7 +37,7 @@ export const FROM_SQL = `
   FROM tr_purchase_request pr
   LEFT JOIN mst_employee   e ON e.employee_id   = pr.employee_id
   LEFT JOIN mst_department d ON d.department_id = pr.department_id
-  LEFT JOIN mst_outlet     o ON o.id            = pr.outlet_id`;
+  LEFT JOIN ${mstOutlet()} o ON o.id            = pr.outlet_id`;
 
 const SELECT_SQL = `
   SELECT pr.pr_id, pr.pr_code, pr.type, pr.status, pr.nama_barang, pr.qty, pr.tanggal_pengajuan,
@@ -236,7 +237,7 @@ export async function getRequest(req, res) {
        LEFT JOIN mst_employee   e   ON e.employee_id   = pr.employee_id
        LEFT JOIN mst_department d   ON d.department_id = pr.department_id
        LEFT JOIN mst_satuan     s   ON s.satuan_id     = pr.satuan_id
-       LEFT JOIN mst_outlet     o   ON o.id            = pr.outlet_id
+       LEFT JOIN ${mstOutlet()} o   ON o.id            = pr.outlet_id
        LEFT JOIN mst_bank       bnk ON bnk.bank_id     = pr.bank_id
        WHERE pr.pr_id = ? AND pr.is_deleted = 0`,
       [id]
@@ -255,14 +256,14 @@ export async function getRequest(req, res) {
       q(`SELECT c.classification_name, a.outlet_id, o.full_name AS outlet_name, a.nominal
          FROM tr_purchase_request_allocation a
          JOIN mst_purchase_classification c ON c.id = a.classification_id
-         LEFT JOIN mst_outlet o ON o.id = a.outlet_id
+         LEFT JOIN ${mstOutlet()} o ON o.id = a.outlet_id
          WHERE a.pr_id = ? ORDER BY c.classification_name, o.full_name`, [id]),
       q(`SELECT nominal_bayar, proof_path, note, paid_by_name, paid_at
          FROM tr_purchase_request_payment WHERE pr_id = ? ORDER BY paid_at ASC, payment_id ASC`, [id]),
       q(`SELECT prs.company_id, c.company_name, prs.outlet_id, o.full_name AS outlet_name
          FROM tr_purchase_request_scope prs
          LEFT JOIN mst_company c ON c.company_id = prs.company_id
-         LEFT JOIN mst_outlet o ON o.id = prs.outlet_id
+         LEFT JOIN ${mstOutlet()} o ON o.id = prs.outlet_id
          WHERE prs.pr_id = ? ORDER BY c.company_name, o.full_name`, [id]),
     ]);
     const [journals] = await alfiPool.query(

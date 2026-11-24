@@ -1,4 +1,5 @@
 import { mainPool } from '../../db/pool.js';
+import { mstOutlet } from '../../utils/outletSource.js';
 import { loadMe } from '../../utils/pengajuanAccess.js';
 import { postPurchaseJournal } from '../../utils/purchaseJournal.js';
 import { removeUploaded } from '../../utils/purchaseUpload.js';
@@ -59,7 +60,7 @@ async function getScopesOfPr(conn, prId) {
     `SELECT prs.company_id, c.company_name, prs.outlet_id, o.full_name AS outlet_name
      FROM tr_purchase_request_scope prs
      LEFT JOIN mst_company c ON c.company_id = prs.company_id
-     LEFT JOIN mst_outlet  o ON o.id         = prs.outlet_id
+     LEFT JOIN ${mstOutlet()} o ON o.id         = prs.outlet_id
      WHERE prs.pr_id = ? ORDER BY c.company_name, o.full_name`,
     [prId]
   );

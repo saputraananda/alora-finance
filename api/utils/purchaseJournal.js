@@ -16,7 +16,8 @@ import { dayLockMessage } from './dayLock.js';
 // ════════════════════════════════════════════════════════════════════════════
 
 export const JOURNAL_COMPANY_IDS = [1, 5];
-const UTANG_USAHA_CODE = '2-1001';
+
+const UTANG_USAHA_CODE = '2-1100';
 const fx = (n) => (Math.round((Number(n) || 0) * 100) / 100).toFixed(2);
 
 export async function postPurchaseJournal(prId, actorId = null) {
