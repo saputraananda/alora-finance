@@ -122,7 +122,7 @@ export function FieldDateRange({ label = "Periode", from, to, onChange, min, max
 
 // Filter tambahan (lebih dari 4 di header): tombol "Filter" + dialog. Isi dialog langsung berlaku (tanpa tombol Terapkan).
 // count = jumlah filter di dalam dialog yang tidak bernilai default; onReset mengembalikan semuanya ke default.
-export function MoreFilters({ count = 0, onReset, title = "Filter", children }) {
+export function MoreFilters({ count = 0, onReset, title = "Filter", summary, children }) {
   const [open, setOpen] = useState(false);
   useEffect(() => {
     if (!open) return undefined;
@@ -132,10 +132,11 @@ export function MoreFilters({ count = 0, onReset, title = "Filter", children }) 
   }, [open]);
   return (
     <>
+      {summary && <span className="hidden rounded-full bg-emerald-50 px-3 py-1.5 text-[11px] font-bold text-emerald-800 lg:inline">{summary}</span>}
       <FilterButton count={count} onClick={() => setOpen(true)} />
       {open && createPortal(
         <div className="fixed inset-0 z-[80] flex items-start justify-center bg-slate-900/30 p-4 pt-24" onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}>
-          <div role="dialog" aria-label={title} className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white shadow-2xl">
+          <div role="dialog" aria-label={title} className="max-h-[80vh] w-full max-w-md overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
               <p className="text-sm font-extrabold text-slate-800">{title}</p>
               <button type="button" onClick={() => setOpen(false)} className="rounded-lg px-2 py-1 text-xs font-bold text-slate-400 hover:bg-slate-100 hover:text-slate-700">Tutup</button>
