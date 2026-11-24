@@ -1,4 +1,4 @@
-import { pool, safeQuery, getOutlets } from "../../db/pool.js";
+import { pool, getOutlets } from "../../db/pool.js";
 import { toFixed2 } from "../../utils/currencyHelpers.js";
 import { cutoffRange, currentCutoffMonth } from "../dashboard/dashboard.controller.js";
 import { lockDateMessage } from "../../utils/dayLock.js";
@@ -14,10 +14,10 @@ import { lockDateMessage } from "../../utils/dayLock.js";
 export const ASSET_ROLES = {
   ASET_TETAP: { label: "Aset Tetap (Mesin & Peralatan)", code: "1-2001" },
   AKUM_PENYUSUTAN: { label: "Akumulasi Penyusutan", code: "1-2002" },
-  BEBAN_PENYUSUTAN: { label: "Beban Penyusutan", code: "5-1012" },
+  BEBAN_PENYUSUTAN: { label: "Biaya Penyusutan", code: "5-1900" },
 };
 
-const LIVE_POSTED = "je.status = 'POSTED'";
+export const LIVE_POSTED = "je.status = 'POSTED'";
 const pad2 = (n) => String(n).padStart(2, "0");
 
 
@@ -28,7 +28,7 @@ function periodOf(q) {
   return { year, month, key: `${year}-${pad2(month)}`, ...cutoffRange(year, month) };
 }
 
-const monthlyOf = (a) => toFixed2(Math.max(0, Number(a.cost) - Number(a.salvage)) / Math.max(1, Number(a.life_months)));
+export const monthlyOf = (a) => toFixed2(Math.max(0, Number(a.cost) - Number(a.salvage)) / Math.max(1, Number(a.life_months)));
 
 // Aset + akumulasi penyusutan (hanya dari jurnal penyusutan yang masih POSTED)
 async function loadAssets() {
@@ -69,8 +69,8 @@ async function depreciationPlan(p) {
   return plan;
 }
 
-// ── GET /assets?year=&month= ────────────────────────────────────────────
-export async function getAssets(req, res) {
+// ── GET /assets/depreciation?year=&month= — penyusutan periode ──────────
+export async function getDepreciation(req, res) {
   try {
     const p = periodOf(req.query);
     const [assets, plan, outlets, [[journal]]] = await Promise.all([
@@ -124,7 +124,7 @@ export async function getAssets(req, res) {
   }
 }
 
-function assetPayload(b = {}) {
+export function assetPayload(b = {}) {
   const code = String(b.code || "").trim().toUpperCase().slice(0, 40);
   const name = String(b.name || "").trim().slice(0, 150);
   const cost = toFixed2(b.cost);

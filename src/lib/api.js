@@ -49,3 +49,6 @@ export async function api(path, options = {}) {
 
   return res.json();
 }
+
+// Alamat lengkap untuk berkas yang disajikan backend Alfi (mis. foto aset), path diawali /api/...
+export const apiFileUrl = (p) => (p ? `${API_BASE}${p}` : null);

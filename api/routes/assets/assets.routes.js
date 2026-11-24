@@ -1,14 +1,19 @@
 import express from 'express';
 import { authenticateToken } from '../../middleware/auth.js';
-import { getAssets, createAsset, updateAsset, moveAsset, disposeAsset, runDepreciation } from '../../controllers/assets/assets.controller.js';
+import { getDepreciation, moveAsset, disposeAsset, runDepreciation } from '../../controllers/assets/assets.controller.js';
+import { getAssets, getAssetDetail, getAssetPhoto, saveAssetFinance } from '../../controllers/assets/assetCatalog.controller.js';
 
 const router = express.Router();
+
+// Foto tanpa token (dipakai tag <img>); sisanya wajib login
+router.get('/assets/photo/:file', getAssetPhoto);
 
 router.use(authenticateToken);
 
 router.get('/assets', getAssets);
-router.post('/assets', createAsset);
-router.put('/assets/:id', updateAsset);
+router.get('/assets/depreciation', getDepreciation);
+router.get('/assets/:id/detail', getAssetDetail);
+router.put('/assets/finance/:kode', saveAssetFinance);
 router.post('/assets/:id/move', moveAsset);
 router.post('/assets/:id/dispose', disposeAsset);
 router.post('/assets/depreciation', runDepreciation);
