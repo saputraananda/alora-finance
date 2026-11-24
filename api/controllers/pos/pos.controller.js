@@ -18,17 +18,17 @@ import { loadStartDates, beforeStart, startMessage } from "../../utils/outletSta
 
 // Peran akun → akun COA bawaan (kode). Bisa diganti lewat tabel mst_account_map.
 export const ROLES = {
-  KAS: { label: "Kas (Tunai)", code: "1-1002" },
-  BANK: { label: "Bank (Transfer Bank)", code: "1-1003" },
-  PIUTANG_QRIS: { label: "Piutang QRIS", code: "1-1007" },
-  PIUTANG_EDC: { label: "Piutang EDC", code: "1-1008" },
-  PIUTANG_USAHA: { label: "Piutang Usaha (Nota)", code: "1-1005" },
-  DEPOSIT_MEMBER: { label: "Deposit Member", code: "2-1004" },
-  PENDAPATAN: { label: "Pendapatan Layanan (bawaan)", code: "4-1001" },
-  PENDAPATAN_B2B: { label: "Pendapatan B2B / Event", code: "4-1002" },
+  KAS: { label: "Kas (Tunai)", code: "1-1100" },
+  BANK: { label: "Bank (Transfer Bank)", code: "1-1300" },
+  PIUTANG_QRIS: { label: "Piutang QRIS", code: "1-1410" },
+  PIUTANG_EDC: { label: "Piutang EDC", code: "1-1420" },
+  PIUTANG_USAHA: { label: "Piutang Usaha (Nota)", code: "1-1400" },
+  DEPOSIT_MEMBER: { label: "Deposit Member", code: "2-1200" },
+  PENDAPATAN: { label: "Pendapatan Layanan (bawaan)", code: "4-1100" },
+  PENDAPATAN_B2B: { label: "Pendapatan B2B / Event", code: "4-1200" },
   // Bawaan sama dengan Pendapatan Layanan agar angka tidak berubah sampai finance memetakan akun sendiri
-  PENDAPATAN_KECEPATAN: { label: "Pendapatan Ekspres (biaya kecepatan)", code: "4-1001" },
-  DISKON_PENJUALAN: { label: "Diskon Penjualan", code: "4-1001" },
+  PENDAPATAN_KECEPATAN: { label: "Pendapatan Ekspres (biaya kecepatan)", code: "4-1100" },
+  DISKON_PENJUALAN: { label: "Diskon Penjualan", code: "4-1100" },
 };
 
 // Peran sisi pembayaran (urutan tampil)
@@ -338,10 +338,9 @@ export async function postSync(req, res) {
     const { date } = req.body || {};
     if (!isValidDate(date)) return res.status(422).json({ message: "Tanggal tidak valid." });
     const r = await syncDay(date, "MANUAL");
-    return res.json({
-      message: r.changed ? `Data ditarik ulang. ${r.changed} cabang berubah sejak penarikan sebelumnya.` : "Data ditarik ulang. Tidak ada perubahan.",
-      ...r,
-    });
+    const a = await autoPostDay(date, req.user?.id || null);
+    const base = r.changed ? `Data ditarik ulang. ${r.changed} cabang berubah sejak penarikan sebelumnya.` : "Data ditarik ulang. Tidak ada perubahan.";
+    return res.json({ message: a.posted ? `${base} ${a.posted} cabang otomatis dijurnalkan.` : base, ...r, auto: a });
   } catch (err) {
     console.error("[postSync] Error:", err);
     return res.status(500).json({ message: "Gagal menarik data POS", error: err.message });
@@ -353,6 +352,13 @@ export async function getPosDay(req, res) {
   try {
     const date = req.query.date;
     if (!isValidDate(date)) return res.status(422).json({ message: "Tanggal tidak valid (YYYY-MM-DD)." });
+
+    // Jurnal otomatis: hari yang sudah lewat dan valid langsung dijurnal (tanpa tombol). Gagal di sini tidak menghalangi tampilan.
+    try {
+      await autoPostDay(date, req.user?.id || null);
+    } catch (e) {
+      console.warn("[getPosDay] jurnal otomatis gagal:", e.message);
+    }
 
     const [accMap, rows, batches, ov, starts] = await Promise.all([loadAccountMap(), computeDay(date), loadBatches(date), loadOutletOverrides(), loadStartDates()]);
     // Hari yang belum pernah ditarik dicatat saat pertama dibuka
@@ -494,6 +500,29 @@ async function postOutletDay(date, outletId, actorId) {
   } finally {
     conn.release();
   }
+}
+
+// ── Jurnal otomatis: data POS yang sudah valid langsung dijurnal (tanpa tombol posting) ──
+// Hanya hari yang sudah lewat (hari ini belum lengkap). Cabang yang gagal validasi, terkunci, atau
+// belum go-live dilewati; alasannya terlihat di Status Sinkron POS dan Dashboard "Perlu tindakan".
+const todayWibStr = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
+
+export async function autoPostDay(date, actorId = null) {
+  if (String(date) >= todayWibStr()) return { date, posted: 0, skipped: 0, failed: [] };
+  const [rows, batches] = await Promise.all([computeDay(date), loadBatches(date)]);
+  let posted = 0;
+  let skipped = 0;
+  const failed = [];
+  for (const r of rows) {
+    const b = batches.get(r.outlet_id);
+    const empty = r.revenue === 0 && r.payments_total === 0;
+    if (empty || (b && b.journal_status !== "REVERSED")) continue; // kosong atau sudah dijurnal
+    const res = await postOutletDay(date, r.outlet_id, actorId);
+    if (res.ok) posted += 1;
+    else if (/Gagal validasi|dikunci|mulai memakai|Pemetaan akun/.test(res.message || "")) skipped += 1;
+    else failed.push({ outlet: r.outlet_name, message: res.message });
+  }
+  return { date, posted, skipped, failed };
 }
 
 // ── POST /pos/post {date, outlet_id} ────────────────────────────────────
