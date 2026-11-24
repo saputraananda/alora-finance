@@ -21,6 +21,9 @@ export default {
           950: '#082f49',
         },
       },
+      keyframes: {
+        navIn: { from: { opacity: "0", transform: "translateX(-8px)" }, to: { opacity: "1", transform: "translateX(0)" } },
+      },
       fontFamily: {
         sans: ['"Plus Jakarta Sans"', 'Poppins', 'sans-serif'],
       },
