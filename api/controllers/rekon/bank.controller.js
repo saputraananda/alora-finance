@@ -485,6 +485,26 @@ export async function deleteStatement(req, res) {
   }
 }
 
+// POST /rekon/bank/statements/delete {ids:[...]} — hapus beberapa mutasi sekaligus (semua atau tidak sama sekali)
+export async function deleteStatements(req, res) {
+  try {
+    const ids = [...new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+    if (!ids.length) return res.status(422).json({ message: "Pilih mutasi yang akan dihapus." });
+    if (ids.length > 500) return res.status(422).json({ message: "Maksimal 500 mutasi sekali hapus." });
+    const [have] = await pool.query(`SELECT id FROM tr_bank_statement WHERE id IN (?)`, [ids]);
+    if (have.length !== ids.length) return res.status(404).json({ message: "Sebagian mutasi tidak ditemukan (mungkin sudah dihapus). Muat ulang halaman." });
+    const [old] = await pool.query(`SELECT DISTINCT statement_id FROM tr_bank_match WHERE statement_id IN (?)`, [ids]);
+    if (old.length) return res.status(422).json({ message: `${old.length} mutasi masih punya pencocokan. Batalkan pencocokannya dulu, lalu hapus.` });
+    // Pencocokan baru (Rekonsiliasi transaksi) yang memakai mutasi ini ikut dibatalkan; ditolak bila sudah masuk General Ledger.
+    const c = await cancelMatchesOfStatements(ids, req.user?.id || null);
+    if (!c.ok) return res.status(422).json({ message: c.message });
+    await pool.query(`DELETE FROM tr_bank_statement WHERE id IN (?)`, [ids]);
+    return res.json({ message: `${ids.length} mutasi dihapus.${c.matches.length ? ` ${c.matches.length} pencocokan (#${c.matches.join(", #")}) ikut dibatalkan.` : ""}`, deleted: ids.length });
+  } catch (err) {
+    return res.status(500).json({ message: "Gagal menghapus mutasi", error: err.message });
+  }
+}
+
 export function bankTemplate(_req, res) {
   const csv =
     "﻿" +

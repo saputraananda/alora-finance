@@ -117,6 +117,8 @@ export default function BankRekon() {
   const [msg, setMsg] = useState(null);
   const [matchFor, setMatchFor] = useState(null);
   const [toDelete, setToDelete] = useState(null);
+  const [sel, setSel] = useState(() => new Set()); // mutasi yang dicentang untuk dihapus sekaligus
+  const [bulkAsk, setBulkAsk] = useState(false);
   const [balanceInput, setBalanceInput] = useState("");
 
   const ym = useMemo(() => month.split("-").map(Number), [month]);
@@ -154,6 +156,20 @@ export default function BankRekon() {
       setBusy(null);
     }
   };
+
+  // Hanya mutasi yang belum dicocokkan (tombol hapus per baris) yang bisa dicentang
+  const selectable = useMemo(() => (data?.rows || []).filter((r) => !r.matched), [data]);
+  useEffect(() => {
+    setSel((cur) => {
+      const ids = new Set(selectable.map((r) => r.id));
+      const next = new Set([...cur].filter((id) => ids.has(id)));
+      return next.size === cur.size ? cur : next;
+    });
+  }, [selectable]);
+  const pickedRows = selectable.filter((r) => sel.has(r.id));
+  const allPicked = selectable.length > 0 && pickedRows.length === selectable.length;
+  const toggleRow = (id) => setSel((cur) => { const n = new Set(cur); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleAll = () => setSel(allPicked ? new Set() : new Set(selectable.map((r) => r.id)));
 
   const downloadTemplate = async () => {
     const base = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
@@ -256,19 +272,31 @@ export default function BankRekon() {
 
           {/* Daftar mutasi */}
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+            {pickedRows.length > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-100 bg-rose-50/70 px-4 py-2.5 text-xs">
+                <p className="font-semibold text-rose-900">{pickedRows.length} mutasi dipilih · Rp {signed(pickedRows.reduce((a, r) => a + Number(r.amount || 0), 0))}</p>
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => setSel(new Set())} className="rounded-lg px-3 py-1.5 text-[11px] font-bold text-slate-500 hover:text-slate-800">Batal pilih</button>
+                  <button type="button" disabled={busy !== null} onClick={() => setBulkAsk(true)} className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-rose-700 disabled:opacity-60">
+                    <HiOutlineTrash className="h-3.5 w-3.5" /> Hapus terpilih ({pickedRows.length})
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
                 <thead className="border-b border-slate-100 bg-slate-50">
-                  <tr><th className={th}>Tanggal</th><th className={th}>Mutasi di rekening koran</th><th className={cn(th, "text-right")}>Jumlah</th><th className={th}>Dicocokkan dengan</th><th className={th}>Status</th><th className={th} /></tr>
+                  <tr><th className="w-9 px-3 py-3"><input type="checkbox" aria-label="Pilih semua mutasi yang bisa dihapus" checked={allPicked} disabled={!selectable.length} onChange={toggleAll} className="h-3.5 w-3.5 accent-rose-600" /></th><th className={th}>Tanggal</th><th className={th}>Mutasi di rekening koran</th><th className={cn(th, "text-right")}>Jumlah</th><th className={th}>Dicocokkan dengan</th><th className={th}>Status</th><th className={th} /></tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {loading && !data.rows.length ? (
-                    <tr><td colSpan={6} className="py-10 text-center text-slate-400">Memuat...</td></tr>
+                    <tr><td colSpan={7} className="py-10 text-center text-slate-400">Memuat...</td></tr>
                   ) : data.rows.length === 0 ? (
-                    <tr><td colSpan={6} className="py-10 text-center text-slate-400">Belum ada mutasi diimpor untuk periode ini.</td></tr>
+                    <tr><td colSpan={7} className="py-10 text-center text-slate-400">Belum ada mutasi diimpor untuk periode ini.</td></tr>
                   ) : (
                     data.rows.map((r) => (
-                      <tr key={r.id} className="hover:bg-slate-50/60">
+                      <tr key={r.id} className={cn("hover:bg-slate-50/60", sel.has(r.id) && "bg-rose-50/40")}>
+                        <td className="px-3 py-2.5">{!r.matched && <input type="checkbox" aria-label={`Pilih mutasi ${r.recon_code || r.id}`} checked={sel.has(r.id)} onChange={() => toggleRow(r.id)} className="h-3.5 w-3.5 accent-rose-600" />}</td>
                         <td className="px-3 py-2.5 tabular-nums text-slate-500">{dm(r.date)}</td>
                         <td className="px-3 py-2.5 font-semibold text-slate-800">
                           {r.description}
@@ -333,6 +361,18 @@ export default function BankRekon() {
           }}
         />
       )}
+      <ConfirmModal
+        open={bulkAsk}
+        onClose={() => setBulkAsk(false)}
+        title={`Hapus ${pickedRows.length} mutasi?`}
+        desc="Mutasi yang dipilih dihapus dari aplikasi. Pencocokan di Rekonsiliasi transaksi yang memakainya ikut dibatalkan. Bila sudah masuk General Ledger, penghapusan ditolak."
+        onConfirm={() => {
+          const ids = pickedRows.map((r) => r.id);
+          setBulkAsk(false);
+          setSel(new Set());
+          run("delbulk", () => api("/finance-ho/rekon/bank/statements/delete", { method: "POST", body: JSON.stringify({ ids }) }));
+        }}
+      />
       <ConfirmModal
         open={Boolean(toDelete)}
         onClose={() => setToDelete(null)}
