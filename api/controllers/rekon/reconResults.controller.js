@@ -4,6 +4,7 @@ import { loadAccountMap, autoPostDay } from "../pos/pos.controller.js";
 import { loadOutletOverrides } from "../../utils/accountResolver.js";
 import { lockDateMessage } from "../../utils/dayLock.js";
 import { ACTIVE_MATCH } from "./reconWorkspace.controller.js";
+import { loadDeposits, depositCode } from "./reconDeposit.controller.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // HASIL REKONSILIASI (Account Receivable › Hasil Rekonsiliasi)
@@ -16,6 +17,8 @@ import { ACTIVE_MATCH } from "./reconWorkspace.controller.js";
 //                           kecuali ada selisih yang dialokasikan (jurnal koreksi Bank).
 //   Selisih kurang: Bank Charge → Beban MDR (QRIS/EDC) / Beban Administrasi Bank (lainnya); Piutang → Piutang Karyawan (tunai) / Piutang Usaha
 //   Selisih lebih : Deposit → Deposit Member; Pelunasan → kredit piutang yang dilunasi
+//   Pemakaian deposit (metode "Deposit", tanpa mutasi bank): item POS_DEPOSIT sudah dijurnal POS (Dr Deposit Member saat bayar) → tanpa jurnal baru;
+//                           item POS_NOTA (nota belum lunas dilunasi deposit): Dr Deposit Member · Cr Piutang Usaha sebesar nota tsb.
 // ════════════════════════════════════════════════════════════════════════════
 
 const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || "")) && !Number.isNaN(Date.parse(`${s}T00:00:00Z`));
@@ -24,13 +27,14 @@ const ALLOC_LABEL = { BANK_CHARGE: "Bank Charge", PIUTANG: "Piutang", DEPOSIT: "
 
 // Muat pencocokan aktif + itemnya. filter: {from,to} (tanggal mutasi bank) atau {ids}
 async function loadMatches({ from, to, ids }) {
-  const where = ids ? `m.id IN (?)` : `EXISTS (SELECT 1 FROM tr_recon_match_item b JOIN tr_bank_statement s ON s.id = CAST(b.ref_key AS UNSIGNED) WHERE b.match_id = m.id AND b.side = 'BANK' AND s.trx_date BETWEEN ? AND ?)`;
+  const where = ids ? `m.id IN (?)` : `(EXISTS (SELECT 1 FROM tr_recon_match_item b JOIN tr_bank_statement s ON s.id = CAST(b.ref_key AS UNSIGNED) WHERE b.match_id = m.id AND b.side = 'BANK' AND s.trx_date BETWEEN ? AND ?)
+      OR (EXISTS (SELECT 1 FROM tr_recon_deposit_use du WHERE du.match_id = m.id) AND DATE_FORMAT(m.created_at,'%Y-%m-%d') BETWEEN ? AND ?))`;
   const [ms] = await pool.query(
     `SELECT m.id, m.bank_account_id, m.status, m.difference, m.explanation, m.alloc_type, m.alloc_party, m.alloc_ref_match_id, m.gl_journal_id,
-            gj.entry_no AS gl_entry_no, gj.status AS gl_status
+            gj.entry_no AS gl_entry_no, gj.status AS gl_status, DATE_FORMAT(m.created_at,'%Y-%m-%d') AS created_date
      FROM tr_recon_match m LEFT JOIN tr_journal_entries gj ON gj.id = m.gl_journal_id
      WHERE ${ACTIVE_MATCH} AND ${where} ORDER BY m.id DESC`,
-    ids ? [ids] : [from, to]
+    ids ? [ids] : [from, to, from, to]
   );
   if (!ms.length) return [];
   const [items] = await pool.query(
@@ -52,7 +56,10 @@ async function loadMatches({ from, to, ids }) {
       [ms.map((m) => m.id)]
     );
   });
-  const by = new Map(ms.map((m) => [m.id, { ...m, bank: [], internal: [] }]));
+  const by = new Map(ms.map((m) => [m.id, { ...m, bank: [], internal: [], uses: [] }]));
+  // Pemakaian deposit (pencocokan tanpa mutasi bank): tautan ke deposit sumber
+  const [uses] = await pool.query(`SELECT match_id, deposit_match_id, amount FROM tr_recon_deposit_use WHERE match_id IN (?) ORDER BY id`, [ms.map((m) => m.id)]);
+  uses.forEach((u) => by.get(u.match_id)?.uses.push({ deposit_match_id: Number(u.deposit_match_id), amount: Number(u.amount) }));
   items.forEach((it) => {
     const m = by.get(it.match_id);
     if (!m) return;
@@ -65,8 +72,26 @@ async function loadMatches({ from, to, ids }) {
 async function loadRefs(matches) {
   const trfIds = [...new Set(matches.flatMap((m) => m.internal.filter((i) => i.ref_type === "POS_TRF").map((i) => Number(i.ref_key))))];
   const jlIds = [...new Set(matches.flatMap((m) => m.internal.filter((i) => i.ref_type === "JOURNAL").map((i) => Number(i.ref_key))))];
+  const payIds = [...new Set(matches.flatMap((m) => m.internal.filter((i) => i.ref_type === "POS_DEPOSIT").map((i) => Number(i.ref_key))))];
+  const notaIds = [...new Set(matches.flatMap((m) => m.internal.filter((i) => i.ref_type === "POS_NOTA").map((i) => Number(i.ref_key))))];
+  const pay = new Map();
+  const nota = new Map();
   const trf = new Map();
   const jl = new Map();
+  if (payIds.length) {
+    const [r] = await myWaschenPool.query(
+      `SELECT l.id, t.order_no, t.outlet_id, c.name AS customer, DATE_FORMAT(l.created_at,'%Y-%m-%d') AS d FROM tr_payment_log l JOIN tr_transaction t ON t.id = l.transaction_id LEFT JOIN mst_customer c ON c.id = t.customer_id WHERE l.id IN (?)`,
+      [payIds]
+    );
+    r.forEach((x) => pay.set(Number(x.id), x));
+  }
+  if (notaIds.length) {
+    const [r] = await myWaschenPool.query(
+      `SELECT t.id, t.order_no, t.outlet_id, c.name AS customer, DATE_FORMAT(t.order_date,'%Y-%m-%d') AS d FROM tr_transaction t LEFT JOIN mst_customer c ON c.id = t.customer_id WHERE t.id IN (?)`,
+      [notaIds]
+    );
+    r.forEach((x) => nota.set(Number(x.id), x));
+  }
   if (trfIds.length) {
     const [r] = await myWaschenPool.query(
       `SELECT l.id, t.order_no, t.outlet_id, DATE_FORMAT(l.created_at,'%Y-%m-%d') AS d FROM tr_payment_log l JOIN tr_transaction t ON t.id = l.transaction_id WHERE l.id IN (?)`,
@@ -78,7 +103,7 @@ async function loadRefs(matches) {
     const [r] = await pool.query(`SELECT jl.id, je.id AS jid, je.entry_no, DATE_FORMAT(je.entry_date,'%Y-%m-%d') AS d FROM tr_journal_lines jl JOIN tr_journal_entries je ON je.id = jl.entry_id WHERE jl.id IN (?)`, [jlIds]);
     r.forEach((x) => jl.set(Number(x.id), x));
   }
-  return { trf, jl };
+  return { trf, jl, pay, nota };
 }
 
 // Hitung tampilan + jurnal tiap pencocokan
@@ -130,7 +155,73 @@ async function buildResults(matches, { skipBankLock = false } = {}) {
   const setoranLeft = new Map(setoran);
   const out = [];
 
+  // Pemakaian deposit: baris tanpa mutasi bank, sisi bank berupa deposit sumber
+  const depIds = [...new Set(matches.flatMap((m) => m.uses.map((u) => u.deposit_match_id)))];
+  const depInfo = new Map((depIds.length ? await loadDeposits(pool, depIds, { includeSpent: true }) : []).map((d) => [d.deposit_match_id, d]));
+  const buildDepositRow = async (m) => {
+    const internal = m.internal.map((i) => {
+      if (i.ref_type === "POS_DEPOSIT") {
+        const p = refs.pay.get(Number(i.ref_key));
+        return { type: i.ref_type, label: `Nota ${p?.order_no || i.ref_key} · ${p?.customer || "-"} (dibayar deposit)`, method: "Deposit", date: p?.d || null, outlet_id: Number(p?.outlet_id || i.outlet_id) || null, amount: toFixed2(i.amount) };
+      }
+      const n = refs.nota.get(Number(i.ref_key));
+      return { type: i.ref_type, label: `Nota ${n?.order_no || i.ref_key} · ${n?.customer || "-"} (belum lunas)`, method: "Deposit", date: n?.d || null, outlet_id: Number(n?.outlet_id || i.outlet_id) || null, amount: toFixed2(i.amount) };
+    });
+    const internalTotal = toFixed2(internal.reduce((s, i) => s + i.amount, 0));
+    const bank = m.uses.map((u) => {
+      const d = depInfo.get(u.deposit_match_id);
+      return { date: d?.date || null, description: `Deposit ${depositCode(u.deposit_match_id)}${d?.bank_description ? ` (${d.bank_description})` : ""}`, amount: toFixed2(u.amount), recon_code: d?.recon_code || null };
+    });
+    const bankTotal = toFixed2(m.uses.reduce((s, u) => s + u.amount, 0));
+    const notaItems = internal.filter((i) => i.type === "POS_NOTA");
+    const blockers = [];
+    const lines = [];
+    // Dr Deposit Member · Cr Piutang Usaha, per cabang nota (akun mengikuti pemetaan cabang)
+    const byOutlet = new Map();
+    notaItems.forEach((i) => byOutlet.set(i.outlet_id, toFixed2((byOutlet.get(i.outlet_id) || 0) + i.amount)));
+    for (const [outlet, amt] of byOutlet) {
+      const acc = ov.forOutlet(outlet, accMap);
+      for (const role of ["DEPOSIT_MEMBER", "PIUTANG_USAHA"]) {
+        if (!acc[role]?.account_id && !blockers.some((b) => b.includes(role))) blockers.push(`Pemetaan akun belum lengkap: ${role}.`);
+      }
+      lines.push({ role: "DEPOSIT_MEMBER", account: acc.DEPOSIT_MEMBER, debit: amt, credit: 0, memo: "Pelunasan nota memakai deposit", outlet_id: outlet || null });
+      lines.push({ role: "PIUTANG_USAHA", account: acc.PIUTANG_USAHA, debit: 0, credit: amt, memo: "Pelunasan piutang nota dari deposit", outlet_id: outlet || null });
+    }
+    if (!blockers.length && notaItems.length && m.created_date && !skipBankLock) {
+      const lockMsg = await lockDateMessage(m.created_date);
+      if (lockMsg) blockers.push(lockMsg);
+    }
+    const done = m.gl_journal_id && m.gl_status === "POSTED";
+    const state = done ? "DONE" : blockers.length ? "BLOCKED" : lines.length ? "READY" : "VIA_SOURCE";
+    const firstOutlet = m.internal.find((i) => i.outlet_id)?.outlet_id || null;
+    const bankLabels = [...new Set(m.uses.map((u) => depInfo.get(u.deposit_match_id)?.bank_label).filter(Boolean))];
+    return {
+      match_id: m.id,
+      date: m.created_date,
+      outlet_id: firstOutlet,
+      outlet_name: firstOutlet ? oname.get(Number(firstOutlet)) || `Outlet #${firstOutlet}` : "Pusat",
+      method: "Deposit",
+      methods: ["Deposit"],
+      internal,
+      bank,
+      bank_label: bankLabels.join(", ") || null,
+      internal_total: internalTotal,
+      bank_total: bankTotal,
+      diff: toFixed2(bankTotal - internalTotal),
+      alloc: null,
+      status: "Matched",
+      state,
+      via_text: state === "VIA_SOURCE" ? "Sudah di GL lewat jurnal POS" : null,
+      journal_no: done ? m.gl_entry_no : null,
+      journal_id: done ? m.gl_journal_id : null,
+      source_journals: [],
+      blockers: done ? [] : blockers,
+      lines: lines.map((l) => ({ account_id: l.account?.account_id || null, account_code: l.account?.code || null, account_name: l.account?.name || l.role, debit: l.debit, credit: l.credit, memo: l.memo, outlet_id: l.outlet_id })),
+    };
+  };
+
   for (const m of [...matches].sort((a, b) => a.id - b.id)) {
+    if (m.uses.length) { out.push(await buildDepositRow(m)); continue; }
     const bankDate = m.bank.map((b) => b.bank_date).filter(Boolean).sort().pop() || null;
     const bankTotal = toFixed2(m.bank.reduce((s, b) => s + Math.abs(Number(b.amount)), 0));
     const outDir = m.bank.some((b) => Number(b.bank_amount) < 0);

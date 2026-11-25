@@ -23,6 +23,7 @@ import {
   createAdminFeeJournal,
   saveStatementBalance,
   deleteStatement,
+  deleteStatements,
   bankTemplate,
 } from '../../controllers/rekon/bank.controller.js';
 
@@ -46,6 +47,7 @@ import {
   getParties,
   getInternalDetail,
 } from '../../controllers/rekon/reconWorkspace.controller.js';
+import { getDeposits as getDepositPool, createDepositMatch } from '../../controllers/rekon/reconDeposit.controller.js';
 
 const router = express.Router();
 
@@ -78,6 +80,9 @@ router.get('/rekon/workspace/history', getHistory);
 router.get('/rekon/workspace/open-piutang', getOpenPiutang);
 router.get('/rekon/workspace/parties', getParties);
 router.get('/rekon/workspace/internal-detail', getInternalDetail);
+// Pencocokan deposit (mode Deposit): deposit tersisa ↔ pembayaran "Potong Saldo Member" / nota belum lunas
+router.get('/rekon/deposit', getDepositPool);
+router.post('/rekon/deposit/match', createDepositMatch);
 // Import mutasi bank (pratinjau → konfirmasi) dan riwayat file
 router.get('/rekon/bank/import/adapters', listAdapters);
 router.post('/rekon/bank/import/preview', importFileMiddleware, previewImport);
@@ -90,6 +95,7 @@ router.post('/rekon/bank/match', manualMatch);
 router.post('/rekon/bank/unmatch', unmatch);
 router.post('/rekon/bank/admin-fee', createAdminFeeJournal);
 router.put('/rekon/bank/balance', saveStatementBalance);
+router.post('/rekon/bank/statements/delete', deleteStatements);
 router.delete('/rekon/bank/statements/:id', deleteStatement);
 
 export default router;

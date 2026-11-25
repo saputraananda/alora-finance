@@ -1,5 +1,6 @@
 import { pool, mainPool, myWaschenPool, getOutlets } from "../../db/pool.js";
 import { employeeNames } from "../pos/nota.controller.js";
+import { depositRemainingTotal } from "./reconDeposit.controller.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // REKONSILIASI TRANSAKSI — ruang kerja dua panel
@@ -26,9 +27,9 @@ const addDays = (d, n) => {
 const dayDiff = (a, b) => Math.round((Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86400000);
 const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ""));
 const yymmdd = (d) => d.slice(2, 4) + d.slice(5, 7) + d.slice(8, 10);
-const LOG_WHERE = `l.created_at >= ? AND l.created_at < DATE_ADD(?, INTERVAL 1 DAY) AND l.log_type IN ('DP','Lunas','Pelunasan') AND t.is_delete_requested = 0`;
+export const LOG_WHERE = `l.created_at >= ? AND l.created_at < DATE_ADD(?, INTERVAL 1 DAY) AND l.log_type IN ('DP','Lunas','Pelunasan') AND t.is_delete_requested = 0`;
 
-async function outletMap() {
+export async function outletMap() {
   const [r] = await myWaschenPool.query(`SELECT id, name, outlet_code FROM mst_outlet`);
   return new Map(r.map((o) => [Number(o.id), { name: o.name, code: o.outlet_code || String(o.id) }]));
 }
@@ -409,6 +410,8 @@ export async function getWorkspace(req, res) {
       }
     });
     Object.keys(alloc).forEach((k) => { alloc[k] = round2(alloc[k]); });
+    // Sisa deposit yang belum dipakai (semua deposit aktif, tidak dibatasi periode) untuk kartu Deposit
+    alloc.deposit_remaining = (await depositRemainingTotal()).deposit_remaining;
     const diffPairs = matchIds.length; // satu pasang kiri-kanan dihitung 1
     return res.json({
       period: { from, to },
@@ -623,7 +626,6 @@ export async function createMatch(req, res) {
       const gap = round2(totalI - totalB); // > 0: uang bank kurang
       const allowed = gap > 0 ? ["BANK_CHARGE", "PIUTANG"] : ["DEPOSIT", "PELUNASAN"];
       if (!allowed.includes(al.type)) return res.status(422).json({ message: gap > 0 ? "Selisih kurang hanya bisa dialokasikan ke Bank Charge atau Piutang." : "Selisih lebih hanya bisa dialokasikan ke Deposit atau Pelunasan kekurangan sebelumnya." });
-      if (explanation.length < 3) return res.status(422).json({ message: "Remark selisih wajib diisi." });
       allocType = al.type;
       if (allocType === "PIUTANG") {
         allocParty = String(al.party || "").trim().slice(0, 120);
@@ -671,6 +673,9 @@ export async function createMatch(req, res) {
 
 // Alasan pencocokan tidak boleh dibatalkan: hari terkait sudah ditransfer ke General Ledger (dikunci di Rekonsiliasi harian)
 async function lockedReason(matchId) {
+  // Deposit yang sudah dipakai tidak boleh dibatalkan sebelum pemakaiannya dibatalkan
+  const [dep] = await pool.query(`SELECT DISTINCT u.match_id FROM tr_recon_deposit_use u JOIN tr_recon_match c ON c.id = u.match_id AND c.undone_at IS NULL WHERE u.deposit_match_id = ?`, [matchId]);
+  if (dep.length) return `Deposit sudah dipakai oleh pencocokan ${dep.map((d) => "#" + d.match_id).join(", ")}. Batalkan pemakaian deposit itu dulu.`;
   const [[gl]] = await pool.query(`SELECT je.entry_no FROM tr_recon_match m JOIN tr_journal_entries je ON je.id = m.gl_journal_id AND je.status = 'POSTED' WHERE m.id = ?`, [matchId]).then(([r]) => [r.length ? r : [null]]).catch(() => [[null]]);
   if (gl) return `Sudah ditransfer ke General Ledger (${gl.entry_no}). Pencocokan tidak bisa dibatalkan.`;
   const [its] = await pool.query(`SELECT ref_type, ref_key, outlet_id FROM tr_recon_match_item WHERE match_id = ? AND side = 'INTERNAL' AND ref_type IN ('POS_CASH','POS_ONLINE')`, [matchId]);
@@ -792,7 +797,7 @@ export async function getHistory(req, res) {
         const o = info.get(Number(i.match_id)) || { codes: new Set(), methods: new Set(), outlets: new Set() };
         if (i.side === "BANK" && i.recon_code) o.codes.add(i.recon_code);
         if (i.side === "INTERNAL") {
-          const m = i.ref_type === "POS_CASH" ? "Tunai" : i.ref_type === "POS_TRF" ? "Transfer" : i.ref_type === "POS_ONLINE" ? String(i.ref_key).split("|")[2] : i.ref_type === "JOURNAL" ? "Jurnal" : null;
+          const m = i.ref_type === "POS_CASH" ? "Tunai" : i.ref_type === "POS_TRF" ? "Transfer" : i.ref_type === "POS_ONLINE" ? String(i.ref_key).split("|")[2] : i.ref_type === "JOURNAL" ? "Jurnal" : i.ref_type === "POS_DEPOSIT" || i.ref_type === "POS_NOTA" ? "Deposit" : null;
           if (m) o.methods.add(m);
           if (i.outlet_id) o.outlets.add(om.get(Number(i.outlet_id))?.name || `Outlet #${i.outlet_id}`);
         }

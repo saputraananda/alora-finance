@@ -9,6 +9,7 @@ import { todayWib } from "../../../lib/cutoff";
 import NotaModal from "../../../components/NotaModal";
 import { FieldMultiSelect, FieldSelect, HeaderActions, MoreFilters, PrimaryButton, RefreshButton } from "../../../components/ui/PageHeader";
 import ImportMutasi from "./ImportMutasi";
+import DepositMode from "./DepositMode";
 
 const cn = (...c) => c.filter(Boolean).join(" ");
 const rp = (n) => new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 }).format(Number(n) || 0);
@@ -80,7 +81,7 @@ function ConfirmMatch({ internal, bank, mode, onMode, categories, catsLoading, p
   const onlineOnly = internal.length > 0 && internal.every((i) => i.ref_type === "POS_ONLINE");
   const mdrText = `Potongan MDR ${[...new Set(internal.map((i) => i.method))].join("/")}`;
   const picked = openPiutang.find((p) => p.match_id === Number(alloc.ref));
-  const allocOk = !canAlloc || (expl.trim().length >= 3 && alloc.type && (alloc.type !== "PIUTANG" || alloc.party.trim()) && (alloc.type !== "PELUNASAN" || (picked && gap <= picked.remaining + TOL)));
+  const allocOk = !canAlloc || (alloc.type && (alloc.type !== "PIUTANG" || alloc.party.trim()) && (alloc.type !== "PELUNASAN" || (picked && gap <= picked.remaining + TOL)));
   const piutangLabel = onlineOnly ? "pelanggan / pihak terkait" : "kasir / pelanggan";
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
@@ -184,7 +185,7 @@ function ConfirmMatch({ internal, bank, mode, onMode, categories, catsLoading, p
                   {alloc.type === "BANK_CHARGE" && <p className="rounded-lg bg-amber-100/70 p-2.5 text-[11px] font-semibold text-amber-900">Selisih Rp {rp(gap)} dicatat sebagai biaya bank (Beban Administrasi / MDR).</p>}
                   {alloc.type === "DEPOSIT" && <p className="rounded-lg bg-emerald-100/70 p-2.5 text-[11px] font-semibold text-emerald-900">Kelebihan Rp {rp(gap)} dicatat sebagai deposit (kewajiban), bukan pendapatan.</p>}
                   {alloc.type === "PELUNASAN" && picked && gap > picked.remaining + TOL && <p className="rounded-lg bg-rose-100/70 p-2.5 text-[11px] font-semibold text-rose-800">Kelebihan lebih besar dari sisa kekurangan (Rp {rp(picked.remaining)}). Pilih kekurangan lain atau alokasikan ke Deposit.</p>}
-                  <label className="block text-[11px] font-semibold text-slate-600">Remark selisih *
+                  <label className="block text-[11px] font-semibold text-slate-600">Remark selisih <span className="font-normal text-slate-400">(opsional)</span>
                     <textarea rows={2} value={expl} onChange={(e) => setExpl(e.target.value)} placeholder={short ? "Mis. Setoran tunai kurang, sisa Rp 496.260 belum disetor kasir. Akan disetor susulan." : "Mis. Setoran susulan kekurangan shift sore 12 Nov (Kasir Rizky)."} className={cn(inputCls, "mt-1 w-full resize-none")} />
                   </label>
                   {onlineOnly && short && alloc.type === "BANK_CHARGE" && (
@@ -373,6 +374,7 @@ export default function Workspace() {
   const [limitL, setLimitL] = useState(200);
   const [limitR, setLimitR] = useState(200);
   const [pane, setPane] = useState("L");
+  const [depMode, setDepMode] = useState(false); // mode Deposit: nota ↔ deposit (bukan mutasi bank)
   const [detail, setDetail] = useState(null);
   const [dlg, setDlg] = useState(null); // {mode}
   const [categories, setCategories] = useState([]);
@@ -596,8 +598,15 @@ export default function Workspace() {
           { k: "PendingBank", label: "Pending Bank", v: s?.pending_bank, tone: "text-amber-600", sub: "menunggu uang masuk di bank" },
           { k: "Matched", label: "Matched", v: s?.matched, tone: "text-emerald-600", sub: "sudah cocok dengan bank" },
           { k: "Difference", label: "Difference", v: s?.difference, tone: "text-rose-600", sub: "pasang dengan selisih", split: true },
-          { k: "deposit", label: "Deposit", v: da ? `Rp ${rp(da.deposit)}` : "-", tone: "text-sky-700", sub: "kelebihan bayar disimpan sebagai deposit", plain: true },
-        ].map((c) => c.split ? (
+          { k: "deposit", label: "Deposit", v: da ? `Rp ${rp(da.deposit)}` : "-", tone: "text-sky-700", sub: "kelebihan bayar disimpan sebagai deposit", dep: true },
+        ].map((c) => c.dep ? (
+          <button key={c.k} type="button" onClick={() => { setDepMode((v) => !v); clear(); }} className={cn("rounded-2xl border bg-white p-4 text-left shadow-sm transition hover:border-emerald-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400", depMode ? "border-emerald-500 bg-emerald-50/40 ring-2 ring-emerald-200" : "border-slate-200")}>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{c.label}</p>
+            <p className={cn("mt-1 text-xl font-extrabold tabular-nums", c.tone)}>{loading && !data ? "…" : c.v}</p>
+            {da?.deposit_remaining != null && <p className="mt-0.5 text-[11px] font-bold tabular-nums text-sky-700">sisa Rp {rp(da.deposit_remaining)}</p>}
+            <p className="mt-0.5 text-[10px] leading-snug text-slate-400">{depMode ? "mode deposit aktif · klik untuk kembali" : c.sub}</p>
+          </button>
+        ) : c.split ? (
           <div key={c.k} className={cn("rounded-2xl border bg-white p-4 text-left shadow-sm transition", statusF === "Difference" ? "border-emerald-500 ring-2 ring-emerald-200" : "border-slate-200 hover:border-emerald-300")}>
             <button type="button" onClick={() => { setAllocF(""); setStatusF(statusF === "Difference" && !allocF ? "all" : "Difference"); }} className="block w-full text-left">
               <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{c.label}</p>
@@ -616,14 +625,24 @@ export default function Workspace() {
             </div>
           </div>
         ) : (
-          <button key={c.k} type="button" disabled={c.plain} onClick={() => !c.plain && setStatusF(statusF === c.k ? "all" : c.k)} className={cn("rounded-2xl border bg-white p-4 text-left shadow-sm transition", !c.plain && "hover:border-emerald-300", statusF === c.k ? "border-emerald-500 ring-2 ring-emerald-200" : "border-slate-200", c.plain && "cursor-default")}>
+          <button key={c.k} type="button" onClick={() => { setDepMode(false); setStatusF(statusF === c.k ? "all" : c.k); }} className={cn("rounded-2xl border bg-white p-4 text-left shadow-sm transition hover:border-emerald-300", statusF === c.k && !depMode ? "border-emerald-500 ring-2 ring-emerald-200" : "border-slate-200")}>
             <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{c.label}</p>
-            <p className={cn("mt-1 text-xl font-extrabold tabular-nums", c.tone)}>{loading && !data ? "…" : c.plain ? c.v : rp(c.v)}</p>
-            <p className="mt-0.5 text-[10px] leading-snug text-slate-400">{statusF === c.k ? "filter aktif · klik untuk semua" : c.sub}</p>
+            <p className={cn("mt-1 text-xl font-extrabold tabular-nums", c.tone)}>{loading && !data ? "…" : rp(c.v)}</p>
+            <p className="mt-0.5 text-[10px] leading-snug text-slate-400">{statusF === c.k && !depMode ? "filter aktif · klik untuk semua" : c.sub}</p>
           </button>
         ))}
       </div>
 
+      {depMode && <DepositMode from={range.from} to={range.to} outlet={outlet} onExit={() => setDepMode(false)} onMatched={(msg) => { showToast({ msg }); load(); }} />}
+
+      {!depMode && <>
+      {/* Filter status yang langsung terlihat (sama dengan isian Status di tombol Filter) */}
+      <div role="group" aria-label="Filter status" className="flex flex-wrap items-center gap-1.5">
+        <span className="mr-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">Status</span>
+        {[["belum", "Belum selesai"], ["all", "Semua"], ["PendingBank", "Pending Bank"], ["Unmatched", "Unmatched"], ["Partial", "Partially Matched"], ["Difference", "Difference"], ["Explained", "Explained"], ["Matched", "Matched"], ["Reviewed", "Reviewed"]].map(([k, l]) => (
+          <button key={k} type="button" aria-pressed={statusF === k} onClick={() => { setAllocF(""); setStatusF(k); }} className={cn("rounded-full border px-3 py-1 text-[11px] font-bold transition", statusF === k ? "border-emerald-500 bg-emerald-600 text-white shadow-sm" : "border-slate-200 bg-white text-slate-600 hover:border-emerald-300 hover:text-emerald-700")}>{l}</button>
+        ))}
+      </div>
       <div className="flex rounded-xl border border-slate-200 bg-white p-0.5 xl:hidden">
         {[["L", "Transaksi Internal"], ["R", "Mutasi Bank"]].map(([k, l]) => <button key={k} type="button" onClick={() => setPane(k)} className={cn("flex-1 rounded-[10px] px-3 py-2 text-xs font-semibold", pane === k ? "bg-emerald-600 text-white" : "text-slate-600")}>{l}</button>)}
       </div>
@@ -778,6 +797,7 @@ export default function Workspace() {
           {!selR.size && !selL.size ? "Pilih satu baris bank: kandidat pasangannya di kiri langsung tersorot beserta persentase kecocokan. Penerimaan: Debit internal ↔ Kredit bank." : !sameDir ? "Mutasi masuk (kredit) dan keluar (debit) tidak boleh dicocokkan sekaligus." : !ready ? "Pilih pasangan di panel seberang." : equal ? "Total sama. Kategori Payment dipilih di dialog konfirmasi." : "Total berbeda. Pilih cara menyelesaikan selisih."}
         </p>
       </div>
+      </>}
 
       {dlg && (
         <ConfirmMatch

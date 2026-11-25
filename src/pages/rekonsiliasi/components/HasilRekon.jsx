@@ -14,8 +14,8 @@ const signed = (n) => (Number(n) > 0 ? `+${rupiah(n)}` : rupiah(n));
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return iso(d); };
 const dmy = (d) => (d ? `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}` : "-");
-const METHODS = [["Tunai", "Tunai"], ["QRIS", "QRIS"], ["EDC", "EDC"], ["Transfer", "Transfer"], ["Jurnal", "Jurnal"]];
-const METHOD_TONE = { Tunai: "bg-emerald-50 text-emerald-700", QRIS: "bg-violet-50 text-violet-700", EDC: "bg-amber-50 text-amber-700", Transfer: "bg-sky-50 text-sky-700", Jurnal: "bg-slate-100 text-slate-600" };
+const METHODS = [["Tunai", "Tunai"], ["QRIS", "QRIS"], ["EDC", "EDC"], ["Transfer", "Transfer"], ["Jurnal", "Jurnal"], ["DEPOSIT", "Deposit"]];
+const METHOD_TONE = { Tunai: "bg-emerald-50 text-emerald-700", QRIS: "bg-violet-50 text-violet-700", EDC: "bg-amber-50 text-amber-700", Transfer: "bg-sky-50 text-sky-700", Jurnal: "bg-slate-100 text-slate-600", Deposit: "bg-sky-50 text-sky-700", DEPOSIT: "bg-sky-50 text-sky-700" };
 const STATUS_TONE = { Matched: "border-emerald-200 bg-emerald-50 text-emerald-700", Difference: "border-rose-200 bg-rose-50 text-rose-700" };
 const th = "px-3 py-2.5";
 
@@ -45,7 +45,6 @@ export default function HasilRekon({ onGoto, initialDate, initialOutlet }) {
   const [msg, setMsg] = useState(null);
   const [journalId, setJournalId] = useState(null);
   const [ask, setAsk] = useState(false);
-  const [dateMode, setDateMode] = useState("bank");
   const [pickDate, setPickDate] = useState("");
   const active = useContext(TabActiveContext);
 
@@ -78,7 +77,7 @@ export default function HasilRekon({ onGoto, initialDate, initialOutlet }) {
   const toggle = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleOpen = (id) => setOpen((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
-  const openTransfer = () => { setDateMode("bank"); setPickDate(iso(new Date())); setAsk(true); };
+  const openTransfer = () => { setPickDate(iso(new Date())); setAsk(true); };
   useEffect(() => {
     if (!ask) return undefined;
     const esc = (e) => { if (e.key === "Escape" && !busy) setAsk(false); };
@@ -88,12 +87,11 @@ export default function HasilRekon({ onGoto, initialDate, initialOutlet }) {
 
   const transfer = async () => {
     if (!picked.length) return;
-    if (dateMode === "pick" && !pickDate) return;
+    if (!pickDate) return;
     setBusy(true);
     setMsg(null);
     try {
-      const body = { match_ids: picked.map((r) => r.match_id) };
-      if (dateMode === "pick") body.entry_date = pickDate;
+      const body = { match_ids: picked.map((r) => r.match_id), entry_date: pickDate };
       const res = await api("/finance-ho/rekon/results/transfer", { method: "POST", body: JSON.stringify(body) });
       setMsg({ type: "ok", text: res.message, details: (res.results || []).filter((x) => !x.ok).map((x) => `#${x.match_id}: ${x.message}`) });
       setSel(new Set());
@@ -119,22 +117,14 @@ export default function HasilRekon({ onGoto, initialDate, initialOutlet }) {
             </div>
             <div className="space-y-3 p-4 text-xs text-slate-700">
               <p className="font-semibold">{picked.length} pencocokan dipilih · total Rp {rupiah(picked.reduce((a, r) => a + (Number(r.bank_total) || 0), 0))}</p>
-              <label className="flex cursor-pointer items-center gap-2 font-semibold">
-                <input type="radio" name="tgl-jurnal" checked={dateMode === "bank"} onChange={() => setDateMode("bank")} className="h-3.5 w-3.5 accent-emerald-600" />
-                Sesuai tanggal mutasi bank
+              <label className="flex items-center justify-between gap-3 font-semibold">
+                Tanggal jurnal
+                <input type="date" aria-label="Tanggal jurnal" value={pickDate} max={iso(new Date())} onChange={(e) => e.target.value && setPickDate(e.target.value)} className="h-9 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10" />
               </label>
-              <label className="flex cursor-pointer items-center gap-2 font-semibold">
-                <input type="radio" name="tgl-jurnal" checked={dateMode === "pick"} onChange={() => setDateMode("pick")} className="h-3.5 w-3.5 accent-emerald-600" />
-                Pilih tanggal jurnal
-              </label>
-              {dateMode === "pick" && (
-                <input type="date" aria-label="Tanggal jurnal" value={pickDate} max={iso(new Date())} onChange={(e) => setPickDate(e.target.value)} className="ml-5 h-9 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10" />
-              )}
-              <p className="rounded-lg bg-slate-50 p-2.5 text-[11px] text-slate-500">Tanggal ini yang tertulis di Buku Besar. Contoh: transaksi Sabtu atau Minggu yang baru dibukukan hari Senin, pilih tanggal Sabtu/Minggu-nya.</p>
             </div>
             <div className="flex justify-end gap-2 border-t border-slate-100 px-4 py-3">
               <button type="button" onClick={() => setAsk(false)} disabled={busy} className="h-9 rounded-lg px-3 text-xs font-bold text-slate-500 hover:text-slate-800 disabled:opacity-40">Batal</button>
-              <PrimaryButton onClick={transfer} disabled={busy || !picked.length || (dateMode === "pick" && !pickDate)}>{busy ? "Memproses..." : "Transfer"}</PrimaryButton>
+              <PrimaryButton onClick={transfer} disabled={busy || !picked.length || !pickDate}>{busy ? "Memproses..." : "Transfer"}</PrimaryButton>
             </div>
           </div>
         </div>,
