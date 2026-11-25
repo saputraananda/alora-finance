@@ -636,13 +636,6 @@ export default function Workspace() {
       {depMode && <DepositMode from={range.from} to={range.to} outlet={outlet} onExit={() => setDepMode(false)} onMatched={(msg) => { showToast({ msg }); load(); }} />}
 
       {!depMode && <>
-      {/* Filter status yang langsung terlihat (sama dengan isian Status di tombol Filter) */}
-      <div role="group" aria-label="Filter status" className="flex flex-wrap items-center gap-1.5">
-        <span className="mr-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">Status</span>
-        {[["belum", "Belum selesai"], ["all", "Semua"], ["PendingBank", "Pending Bank"], ["Unmatched", "Unmatched"], ["Partial", "Partially Matched"], ["Difference", "Difference"], ["Explained", "Explained"], ["Matched", "Matched"], ["Reviewed", "Reviewed"]].map(([k, l]) => (
-          <button key={k} type="button" aria-pressed={statusF === k} onClick={() => { setAllocF(""); setStatusF(k); }} className={cn("rounded-full border px-3 py-1 text-[11px] font-bold transition", statusF === k ? "border-emerald-500 bg-emerald-600 text-white shadow-sm" : "border-slate-200 bg-white text-slate-600 hover:border-emerald-300 hover:text-emerald-700")}>{l}</button>
-        ))}
-      </div>
       <div className="flex rounded-xl border border-slate-200 bg-white p-0.5 xl:hidden">
         {[["L", "Transaksi Internal"], ["R", "Mutasi Bank"]].map(([k, l]) => <button key={k} type="button" onClick={() => setPane(k)} className={cn("flex-1 rounded-[10px] px-3 py-2 text-xs font-semibold", pane === k ? "bg-emerald-600 text-white" : "text-slate-600")}>{l}</button>)}
       </div>
