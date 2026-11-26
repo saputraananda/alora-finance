@@ -99,11 +99,13 @@ export async function getAccounts(req, res) {
  */
 export async function getAccountsForSelect(req, res) {
     try {
+        // ?headers=1 → sertakan akun induk (header) + parent_id agar dropdown bisa dikelompokkan
+        const withHeaders = req.query.headers === "1";
         const [rows] = await pool.query(
-            `SELECT id, code, name, type, normal_balance, is_header, is_active 
-       FROM mst_coa 
-       WHERE (is_active IS NULL OR is_active = 1) 
-         AND (is_header IS NULL OR is_header = 0)
+            `SELECT id, code, name, type, normal_balance, parent_id, is_header, is_active
+       FROM mst_coa
+       WHERE (is_active IS NULL OR is_active = 1)
+         ${withHeaders ? "" : "AND (is_header IS NULL OR is_header = 0)"}
        ORDER BY code ASC`
         );
         return res.json({ data: rows });

@@ -47,9 +47,11 @@ export default function Klasifikasi({ embedded = false }) {
     }
   };
 
-  const active = (rows || []).filter((r) => r.is_active);
+  // Hanya klasifikasi bertipe biaya (nama diawali "Biaya") yang ditampilkan
+  const biayaRows = (rows || []).filter((r) => /^biaya/i.test(String(r.classification_name || "").trim()));
+  const active = biayaRows.filter((r) => r.is_active);
   const mapped = active.filter((r) => r.account_id).length;
-  const shown = (rows || []).filter((r) => !onlyEmpty || (r.is_active && !r.account_id));
+  const shown = biayaRows.filter((r) => !onlyEmpty || (r.is_active && !r.account_id));
 
   return (
     <FinanceOnly>

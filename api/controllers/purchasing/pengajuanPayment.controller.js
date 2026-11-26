@@ -148,30 +148,60 @@ function classificationLabel(classRows, splits, allocRows, targetsCount) {
   return classRows.map((c) => (splits[c.id] ? `${c.classification_name} (${rpFmt(splits[c.id])})` : c.classification_name)).join(', ');
 }
 
-// Simpan akun Debit (per klasifikasi) & Kredit pilihan Finance. Hanya akun aktif non-header yang diterima.
-async function savePostingAccounts(prId, raw, classIds, actorId) {
-  let p = null;
-  try { p = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { p = null; }
-  if (!p || typeof p !== 'object') return;
-  const want = [];
-  for (const cid of classIds) {
-    const a = Number(p.debit?.[cid]);
-    if (a) want.push([prId, Number(cid), 'D', a, actorId]);
-  }
-  if (Number(p.credit)) want.push([prId, 0, 'K', Number(p.credit), actorId]);
-  if (!want.length) return;
-  const [ok] = await alfiPool.query(
-    `SELECT id FROM mst_coa WHERE id IN (?) AND (is_active IS NULL OR is_active = 1) AND (is_header IS NULL OR is_header = 0)`,
-    [[...new Set(want.map((w) => w[3]))]]
+// postings = { debit: id akun, credit: id akun } (dipilih Finance di modal Bayar)
+const parsePostings = (raw) => {
+  const p = parseJson(raw);
+  const n = (v) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : null);
+  return { debit: n(p?.debit), credit: n(p?.credit) };
+};
+
+// Akun harus aktif dan bukan header. Mengembalikan pesan galat atau null.
+async function checkPostingAccounts(pk) {
+  const ids = [pk.debit, pk.credit].filter(Boolean);
+  if (!ids.length) return null;
+  if (pk.debit && pk.credit && pk.debit === pk.credit) return 'Akun Debit dan Kredit tidak boleh sama.';
+  const [rows] = await alfiPool.query(
+    `SELECT id, code, name FROM mst_coa WHERE id IN (?) AND (is_active IS NULL OR is_active = 1) AND (is_header IS NULL OR is_header = 0)`,
+    [ids]
   );
-  const okIds = new Set(ok.map((r) => Number(r.id)));
-  const rows = want.filter((w) => okIds.has(w[3]));
-  if (!rows.length) return;
+  if (rows.length !== new Set(ids).size) return 'Akun Debit/Kredit tidak valid (tidak aktif atau akun induk).';
+  return null;
+}
+
+// Alokasi per perusahaan/outlet (tanpa klasifikasi). Hanya perlu bila pengajuan mencakup lebih dari satu target.
+function parsePayAlloc(raw, targets, nominal) {
+  if (targets.length <= 1) return { rows: [], error: null };
+  const list = parseJson(raw);
+  if (!Array.isArray(list) || !list.length) return { rows: [], error: 'Alokasi nominal per outlet wajib diisi.' };
+  const rows = targets.map((t) => {
+    const hit = list.find((r) => Number(r.company_id) === Number(t.company_id) && Number(r.outlet_id || 0) === Number(t.outlet_id || 0));
+    const n = Math.round(Number(hit?.nominal));
+    return { company_id: t.company_id, outlet_id: t.outlet_id || 0, nominal: Number.isFinite(n) && n > 0 ? n : 0 };
+  });
+  if (rows.some((r) => !r.nominal)) return { rows: [], error: 'Setiap outlet/perusahaan wajib punya nominal alokasi.' };
+  if (nominal && rows.reduce((a, r) => a + r.nominal, 0) !== Math.round(nominal)) return { rows: [], error: 'Total alokasi harus sama dengan nominal bayar.' };
+  return { rows, error: null };
+}
+
+async function savePostingAccounts(prId, pk, allocRows, actorId) {
+  if (!pk.debit && !pk.credit && !allocRows.length) return;
   await alfiPool.query(`DELETE FROM tr_purchase_pay_account WHERE pr_id = ?`, [prId]);
-  await alfiPool.query(
-    `INSERT INTO tr_purchase_pay_account (pr_id, classification_id, side, account_id, created_by) VALUES ${rows.map(() => '(?, ?, ?, ?, ?)').join(', ')}`,
-    rows.flat()
-  );
+  await alfiPool.query(`DELETE FROM tr_purchase_pay_alloc WHERE pr_id = ?`, [prId]);
+  const rows = [];
+  if (pk.debit) rows.push([prId, 0, 'D', pk.debit, actorId]);
+  if (pk.credit) rows.push([prId, 0, 'K', pk.credit, actorId]);
+  if (rows.length) {
+    await alfiPool.query(
+      `INSERT INTO tr_purchase_pay_account (pr_id, classification_id, side, account_id, created_by) VALUES ${rows.map(() => '(?, ?, ?, ?, ?)').join(', ')}`,
+      rows.flat()
+    );
+  }
+  if (allocRows.length) {
+    await alfiPool.query(
+      `INSERT INTO tr_purchase_pay_alloc (pr_id, company_id, outlet_id, nominal) VALUES ${allocRows.map(() => '(?, ?, ?, ?)').join(', ')}`,
+      allocRows.flatMap((r) => [prId, r.company_id, r.outlet_id, r.nominal])
+    );
+  }
 }
 
 // POST /purchasing/requests/:id/pay
@@ -188,7 +218,12 @@ export async function payRequest(req, res) {
 
   const b = req.body || {};
   const classIds = parseClassificationIds(b.classification_ids ?? b.classification_id);
-  if (!classIds.length) return fail(400, 'Klasifikasi wajib dipilih.');
+  const pk = parsePostings(b.postings);
+  if (!classIds.length && !(pk.debit && pk.credit)) return fail(400, 'Akun Debit dan Kredit wajib dipilih.');
+  {
+    const bad = await checkPostingAccounts(pk);
+    if (bad) return fail(400, bad);
+  }
   const method = ['cash', 'kredit'].includes(b.payment_method) ? b.payment_method : null;
   if (!method) return fail(400, 'Metode pembayaran (Tunai/Kredit) wajib dipilih.');
   if (!files.length) return fail(400, 'Bukti pembayaran wajib dilampirkan.');
@@ -225,24 +260,37 @@ export async function payRequest(req, res) {
       return fail(400, 'Pengajuan belum siap untuk pembayaran, atau sudah diproses.');
     }
 
-    const [classRows] = await conn.query(
-      `SELECT id, classification_name FROM mst_purchase_classification WHERE is_active = 1 AND id IN (?) ORDER BY classification_name`,
-      [classIds]
-    );
-    if (!classRows.length) {
+    const classRows = classIds.length
+      ? (await conn.query(
+          `SELECT id, classification_name FROM mst_purchase_classification WHERE is_active = 1 AND id IN (?) ORDER BY classification_name`,
+          [classIds]
+        ))[0]
+      : [];
+    if (classIds.length && !classRows.length) {
       await conn.rollback();
       return fail(400, 'Klasifikasi tidak valid.');
     }
     const cIds = classRows.map((c) => c.id);
 
     const targets = scopePayTargets(await getScopesOfPr(conn, id));
-    const parsed = parseAllocations(b.allocations, cIds, targets, nominal, b.classification_splits);
+    // Alur lama (klasifikasi) tetap didukung; alur baru memakai akun Debit/Kredit + alokasi per outlet
+    const parsed = cIds.length ? parseAllocations(b.allocations, cIds, targets, nominal, b.classification_splits) : { rows: [], error: null };
     if (parsed.error) {
       await conn.rollback();
       return fail(400, parsed.error);
     }
-    const splits = parsed.rows.length ? splitsFromAllocations(cIds, parsed.rows) : parseClassificationSplits(b.classification_splits, cIds, nominal);
-    const classLabel = classificationLabel(classRows, splits, parsed.rows, targets.length);
+    const payAlloc = cIds.length ? { rows: [], error: null } : parsePayAlloc(b.allocations, targets, nominal);
+    if (payAlloc.error) {
+      await conn.rollback();
+      return fail(400, payAlloc.error);
+    }
+    const splits = !cIds.length ? {} : parsed.rows.length ? splitsFromAllocations(cIds, parsed.rows) : parseClassificationSplits(b.classification_splits, cIds, nominal);
+    let classLabel = classificationLabel(classRows, splits, parsed.rows, targets.length);
+    if (!cIds.length) {
+      const [acc] = await alfiPool.query(`SELECT id, code, name FROM mst_coa WHERE id IN (?)`, [[pk.debit, pk.credit]]);
+      const nm = (id) => { const a = acc.find((x) => Number(x.id) === id); return a ? `${a.code} ${a.name}` : id; };
+      classLabel = `Debit ${nm(pk.debit)} / Kredit ${nm(pk.credit)}`;
+    }
 
     const reimburse = pr.type === 'reimburse';
     const toStatus = reimburse ? 7 : 6;
@@ -262,7 +310,7 @@ export async function payRequest(req, res) {
           updated_at = NOW()
        WHERE pr_id = ? AND status = 5`,
       [
-        toStatus, cIds[0], method, terminValue, terminUnit, jatuhTempo, nominal, adminFee,
+        toStatus, cIds[0] ?? null, method, terminValue, terminUnit, jatuhTempo, nominal, adminFee,
         me.employee_id, ...paidParam, proofPath, note,
         ...(reimburse ? [me.employee_id, ...paidParam, proofPath] : []),
         id,
@@ -274,11 +322,13 @@ export async function payRequest(req, res) {
     }
 
     // Klasifikasi & alokasi
-    await conn.query(`DELETE FROM tr_purchase_request_classification WHERE pr_id = ?`, [id]);
-    await conn.query(
-      `INSERT IGNORE INTO tr_purchase_request_classification (pr_id, classification_id, nominal) VALUES ${cIds.map(() => '(?, ?, ?)').join(', ')}`,
-      cIds.flatMap((cid) => [id, cid, splits[cid] ?? null])
-    );
+    if (cIds.length) {
+      await conn.query(`DELETE FROM tr_purchase_request_classification WHERE pr_id = ?`, [id]);
+      await conn.query(
+        `INSERT IGNORE INTO tr_purchase_request_classification (pr_id, classification_id, nominal) VALUES ${cIds.map(() => '(?, ?, ?)').join(', ')}`,
+        cIds.flatMap((cid) => [id, cid, splits[cid] ?? null])
+      );
+    }
     if (parsed.rows.length) {
       await conn.query(`DELETE FROM tr_purchase_request_allocation WHERE pr_id = ?`, [id]);
       await conn.query(
@@ -320,7 +370,7 @@ export async function payRequest(req, res) {
 
     // Akun Debit/Kredit pilihan Finance (disimpan di alfi; kosong = pemetaan otomatis)
     try {
-      await savePostingAccounts(id, b.postings, cIds, req.user?.id ?? null);
+      await savePostingAccounts(id, pk, cIds.length ? [] : (parsePayAlloc(b.allocations, targets, nominal).rows), req.user?.id ?? null);
     } catch (e) {
       console.error('[purchasing.payRequest/postings]', e);
     }

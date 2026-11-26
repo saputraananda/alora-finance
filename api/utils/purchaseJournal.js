@@ -44,15 +44,28 @@ export async function postPurchaseJournal(prId, actorId = null) {
   if (total <= 0) return { status: 'TANPA_NOMINAL', message: 'Nominal bayar belum terisi — belum bisa dijurnal.' };
   if (!pr.paid_date) return { status: 'TANPA_TANGGAL', message: 'Tanggal bayar belum terisi.' };
 
-  // Baris biaya: alokasi (klasifikasi × perusahaan × outlet); cadangan: klasifikasi saja
-  let [rows] = await mainPool.query(
+  const [picks] = await alfiPool.query(`SELECT classification_id, side, account_id FROM tr_purchase_pay_account WHERE pr_id = ?`, [prId]);
+  const pickedDebit = picks.find((x) => x.side === 'D' && Number(x.classification_id) === 0);
+  const pickedCredit = picks.find((x) => x.side === 'K');
+
+  // Baris biaya: alur baru = akun Debit pilihan (alokasi per outlet bila ada, jika tidak satu baris total);
+  // alur lama = alokasi (klasifikasi × perusahaan × outlet); cadangan: klasifikasi saja
+  let rows;
+  if (pickedDebit) {
+    const [al] = await alfiPool.query(`SELECT company_id, outlet_id, nominal FROM tr_purchase_pay_alloc WHERE pr_id = ?`, [prId]);
+    rows = al.length
+      ? al.map((a) => ({ classification_id: 0, classification_name: 'Akun debit pilihan', company_id: a.company_id, outlet_id: Number(a.outlet_id) || null, nominal: Number(a.nominal) }))
+      : [{ classification_id: 0, classification_name: 'Akun debit pilihan', company_id: pr.company_id, outlet_id: pr.outlet_id, nominal: total }];
+  } else {
+    [rows] = await mainPool.query(
     `SELECT a.classification_id, c.classification_name, a.company_id, a.outlet_id, a.nominal
      FROM tr_purchase_request_allocation a
      JOIN mst_purchase_classification c ON c.id = a.classification_id
      WHERE a.pr_id = ?`,
-    [prId]
-  );
-  if (!rows.length) {
+      [prId]
+    );
+  }
+  if (!rows.length && !pickedDebit) {
     const [cl] = await mainPool.query(
       `SELECT prc.classification_id, c.classification_name, prc.nominal
        FROM tr_purchase_request_classification prc
@@ -80,10 +93,8 @@ export async function postPurchaseJournal(prId, actorId = null) {
     [ids]
   );
   const accOf = new Map(maps.map((m) => [Number(m.classification_id), Number(m.account_id)]));
-  // Pilihan Finance saat bayar (bila ada) menggantikan pemetaan otomatis
-  const [picks] = await alfiPool.query(`SELECT classification_id, side, account_id FROM tr_purchase_pay_account WHERE pr_id = ?`, [prId]);
-  for (const k of picks.filter((x) => x.side === 'D')) accOf.set(Number(k.classification_id), Number(k.account_id));
-  const pickedCredit = picks.find((x) => x.side === 'K');
+  // Akun debit pilihan Finance berlaku untuk semua baris biaya
+  if (pickedDebit) for (const r of inScope) accOf.set(Number(r.classification_id), Number(pickedDebit.account_id));
   const missing = [...new Set(inScope.filter((r) => !accOf.has(Number(r.classification_id))).map((r) => r.classification_name))];
   if (missing.length) {
     return { status: 'BELUM_DIPETAKAN', missing, message: `Klasifikasi belum dipetakan ke akun: ${missing.join(', ')}.` };
