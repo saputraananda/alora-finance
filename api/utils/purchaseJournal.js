@@ -7,6 +7,8 @@ import { dayLockMessage } from './dayLock.js';
 //   Tunai : Dr Akun klasifikasi (beban/aset)   Cr Bank
 //   Kredit: Dr Akun klasifikasi (beban/aset)   Cr Utang Usaha
 //   Biaya admin (bila ada): Dr Beban Administrasi Bank   Cr Bank
+//   Akun Debit (per klasifikasi) dan Kredit dapat dipilih Finance saat bayar (tr_purchase_pay_account);
+//   bila tidak dipilih, dipakai pemetaan di atas.
 //
 // Aturan sementara (menunggu validasi finance — lihat daftar validasi):
 //   • Hanya perusahaan yang dibukukan di alfi: Waschen Laundry (5) & PT Waschen Alora (1).
@@ -78,6 +80,10 @@ export async function postPurchaseJournal(prId, actorId = null) {
     [ids]
   );
   const accOf = new Map(maps.map((m) => [Number(m.classification_id), Number(m.account_id)]));
+  // Pilihan Finance saat bayar (bila ada) menggantikan pemetaan otomatis
+  const [picks] = await alfiPool.query(`SELECT classification_id, side, account_id FROM tr_purchase_pay_account WHERE pr_id = ?`, [prId]);
+  for (const k of picks.filter((x) => x.side === 'D')) accOf.set(Number(k.classification_id), Number(k.account_id));
+  const pickedCredit = picks.find((x) => x.side === 'K');
   const missing = [...new Set(inScope.filter((r) => !accOf.has(Number(r.classification_id))).map((r) => r.classification_name))];
   if (missing.length) {
     return { status: 'BELUM_DIPETAKAN', missing, message: `Klasifikasi belum dipetakan ke akun: ${missing.join(', ')}.` };
@@ -85,8 +91,10 @@ export async function postPurchaseJournal(prId, actorId = null) {
 
   // Akun sumber dana
   const kredit = pr.payment_method === 'kredit';
-  let fundId;
-  if (kredit) {
+  let fundId = pickedCredit ? Number(pickedCredit.account_id) : null;
+  if (fundId) {
+    /* akun kredit dipilih Finance */
+  } else if (kredit) {
     const [[u]] = await alfiPool.query(`SELECT id FROM mst_coa WHERE code = ? AND is_active = 1`, [UTANG_USAHA_CODE]).then(([r]) => [r]);
     fundId = u?.id;
     if (!fundId) return { status: 'AKUN_BELUM_ADA', message: `Akun Utang Usaha (${UTANG_USAHA_CODE}) tidak ditemukan.` };

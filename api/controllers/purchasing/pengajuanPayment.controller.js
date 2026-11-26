@@ -2,6 +2,7 @@ import { mainPool } from '../../db/pool.js';
 import { mstOutlet } from '../../utils/outletSource.js';
 import { loadMe } from '../../utils/pengajuanAccess.js';
 import { postPurchaseJournal } from '../../utils/purchaseJournal.js';
+import { pool as alfiPool } from '../../db/pool.js';
 import { removeUploaded } from '../../utils/purchaseUpload.js';
 import { sanitize, audit, loadPr, writeLog } from './pengajuanActions.controller.js';
 
@@ -145,6 +146,32 @@ function classificationLabel(classRows, splits, allocRows, targetsCount) {
       .join(', ');
   }
   return classRows.map((c) => (splits[c.id] ? `${c.classification_name} (${rpFmt(splits[c.id])})` : c.classification_name)).join(', ');
+}
+
+// Simpan akun Debit (per klasifikasi) & Kredit pilihan Finance. Hanya akun aktif non-header yang diterima.
+async function savePostingAccounts(prId, raw, classIds, actorId) {
+  let p = null;
+  try { p = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { p = null; }
+  if (!p || typeof p !== 'object') return;
+  const want = [];
+  for (const cid of classIds) {
+    const a = Number(p.debit?.[cid]);
+    if (a) want.push([prId, Number(cid), 'D', a, actorId]);
+  }
+  if (Number(p.credit)) want.push([prId, 0, 'K', Number(p.credit), actorId]);
+  if (!want.length) return;
+  const [ok] = await alfiPool.query(
+    `SELECT id FROM mst_coa WHERE id IN (?) AND (is_active IS NULL OR is_active = 1) AND (is_header IS NULL OR is_header = 0)`,
+    [[...new Set(want.map((w) => w[3]))]]
+  );
+  const okIds = new Set(ok.map((r) => Number(r.id)));
+  const rows = want.filter((w) => okIds.has(w[3]));
+  if (!rows.length) return;
+  await alfiPool.query(`DELETE FROM tr_purchase_pay_account WHERE pr_id = ?`, [prId]);
+  await alfiPool.query(
+    `INSERT INTO tr_purchase_pay_account (pr_id, classification_id, side, account_id, created_by) VALUES ${rows.map(() => '(?, ?, ?, ?, ?)').join(', ')}`,
+    rows.flat()
+  );
 }
 
 // POST /purchasing/requests/:id/pay
@@ -291,6 +318,12 @@ export async function payRequest(req, res) {
     await conn.commit();
     await audit(req, id, 'UPDATE', { pr_code: pr.pr_code, action: 'bayar', from: 5, to: toStatus, method, nominal, by: me.full_name, via: 'alfi' });
 
+    // Akun Debit/Kredit pilihan Finance (disimpan di alfi; kosong = pemetaan otomatis)
+    try {
+      await savePostingAccounts(id, b.postings, cIds, req.user?.id ?? null);
+    } catch (e) {
+      console.error('[purchasing.payRequest/postings]', e);
+    }
     let journal;
     try {
       journal = await postPurchaseJournal(id, req.user?.id ?? null);

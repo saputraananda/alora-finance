@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
-import { HiOutlineXMark } from "react-icons/hi2";
+import { HiOutlineChevronDown, HiOutlineXMark } from "react-icons/hi2";
 import { settingsPath } from "../../settings/sections";
 import { getToken } from "../../../lib/api";
 import { api } from "../../../lib/api";
@@ -39,6 +39,12 @@ function buildTargets(scope = []) {
 export default function PayModal({ pr, scope, onClose, onDone }) {
   const [classes, setClasses] = useState([]);
   const [picked, setPicked] = useState([]);
+  const [clsOpen, setClsOpen] = useState(false);
+  const [accounts, setAccounts] = useState([]);
+  const [debitSel, setDebitSel] = useState({}); // { klasifikasi: id akun debit }
+  const [creditSel, setCreditSel] = useState("");
+  const [creditTouched, setCreditTouched] = useState(false);
+  const clsRef = useRef(null);
   const [method, setMethod] = useState("cash");
   const [terminValue, setTerminValue] = useState("");
   const [terminUnit, setTerminUnit] = useState("hari");
@@ -54,6 +60,33 @@ export default function PayModal({ pr, scope, onClose, onDone }) {
   useEffect(() => {
     api("/finance-ho/purchasing/classifications").then((r) => setClasses(r.data.filter((c) => c.is_active))).catch((e) => setError(e.message));
   }, []);
+
+  useEffect(() => {
+    if (!clsOpen) return undefined;
+    const h = (e) => { if (clsRef.current && !clsRef.current.contains(e.target)) setClsOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [clsOpen]);
+
+  useEffect(() => {
+    api("/finance-ho/accounts/select").then((r) => setAccounts(r.data || [])).catch(() => {});
+  }, []);
+
+  // Debit bawaan = akun yang dipetakan ke klasifikasi (boleh diganti)
+  useEffect(() => {
+    setDebitSel((cur) => {
+      const next = {};
+      for (const id of picked) next[id] = cur[id] ?? String(classes.find((c) => c.id === id)?.account_id ?? "");
+      return next;
+    });
+  }, [picked, classes]);
+
+  // Kredit bawaan: tunai → Bank (1-1301), kredit → Utang Usaha (2-1100); boleh diganti
+  useEffect(() => {
+    if (creditTouched) return;
+    const code = method === "kredit" ? "2-1100" : "1-1301";
+    setCreditSel(String(accounts.find((a) => a.code === code)?.id ?? ""));
+  }, [method, accounts, creditTouched]);
 
   const targets = useMemo(() => buildTargets(scope), [scope]);
   const cellList = useMemo(
@@ -86,6 +119,7 @@ export default function PayModal({ pr, scope, onClose, onDone }) {
       fd.append("termin_value", terminValue);
       fd.append("termin_unit", terminUnit);
     }
+    fd.append("postings", JSON.stringify({ debit: Object.fromEntries(Object.entries(debitSel).filter(([, v]) => v)), credit: creditSel || null }));
     if (paidAt) fd.append("paid_at", paidAt);
     if (note.trim()) fd.append("payment_note", note.trim());
     if (needGrid) {
@@ -133,49 +167,64 @@ export default function PayModal({ pr, scope, onClose, onDone }) {
         </div>
 
         <div className="space-y-4 overflow-auto p-5">
-          <div>
-            <p className="mb-1.5 text-[11px] font-bold text-slate-500">Klasifikasi (boleh lebih dari satu)</p>
-            <div className="flex max-h-32 flex-wrap gap-1.5 overflow-auto rounded-lg border border-slate-100 p-2">
-              {classes.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => toggle(c.id)}
-                  className={cn(
-                    "rounded-full border px-2.5 py-1 text-[11px] font-semibold transition",
-                    picked.includes(c.id) ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-emerald-400",
-                    !c.account_id && !picked.includes(c.id) && "border-dashed"
-                  )}
-                  title={c.account_id ? `${c.account_code} · ${c.account_name}` : "Belum dipetakan ke akun — pembayaran tetap bisa dicatat, jurnal menunggu pemetaan"}
-                >
-                  {c.classification_name}
-                </button>
-              ))}
-            </div>
-            <p className="mt-1 text-[10px] text-slate-400">
-              Garis putus-putus = belum dipetakan ke akun (jurnal ditunda sampai dipetakan di{" "}
-              <Link to={settingsPath("klasifikasi")} className="font-bold text-emerald-700 hover:underline">Pengaturan › Klasifikasi Pengajuan</Link>).
-            </p>
-          </div>
-
           <div className="grid gap-3 sm:grid-cols-2">
-            <label className="text-[11px] font-bold text-slate-500">Metode bayar
+            <label className="text-[11px] font-bold text-slate-500">Waktu pembayaran
+              <input type="datetime-local" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} className={cn(inputCls, "mt-1")} />
+            </label>
+            <label className="text-[11px] font-bold text-slate-500">Metode pembayaran
               <select value={method} onChange={(e) => setMethod(e.target.value)} className={cn(selectCls, "mt-1 w-full")}>
                 <option value="cash">Tunai / transfer langsung</option>
                 <option value="kredit">Kredit (hutang)</option>
               </select>
             </label>
-            <label className="text-[11px] font-bold text-slate-500">Tanggal & jam bayar
-              <input type="datetime-local" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} className={cn(inputCls, "mt-1")} />
+          </div>
+
+          <div>
+            <p className="mb-1.5 text-[11px] font-bold text-slate-500">Klasifikasi (boleh lebih dari satu)</p>
+            <div ref={clsRef} className="relative">
+              <button type="button" onClick={() => setClsOpen((o) => !o)} aria-haspopup="listbox" aria-expanded={clsOpen} className={cn(selectCls, "flex w-full items-center justify-between gap-2 text-left")}>
+                <span className={cn("truncate", !picked.length && "text-slate-400")}>
+                  {!picked.length ? "Pilih klasifikasi…" : picked.length <= 2 ? picked.map(className).join(", ") : `${picked.length} klasifikasi dipilih`}
+                </span>
+                <HiOutlineChevronDown className={cn("h-4 w-4 shrink-0 text-slate-400 transition", clsOpen && "rotate-180")} />
+              </button>
+              {clsOpen && (
+                <div role="listbox" aria-multiselectable="true" className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-xl border border-slate-200 bg-white p-1 shadow-lg">
+                  {!classes.length && <p className="px-3 py-2 text-xs text-slate-400">Belum ada klasifikasi aktif.</p>}
+                  {classes.map((c) => (
+                    <label key={c.id} role="option" aria-selected={picked.includes(c.id)} className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 hover:bg-emerald-50" title={c.account_id ? `${c.account_code} · ${c.account_name}` : "Belum dipetakan ke akun — pembayaran tetap bisa dicatat, jurnal menunggu pemetaan"}>
+                      <input type="checkbox" checked={picked.includes(c.id)} onChange={() => toggle(c.id)} className="h-3.5 w-3.5 accent-emerald-600" />
+                      <span className="flex-1 truncate">{c.classification_name}</span>
+                      {!c.account_id && <span className="text-[10px] font-semibold text-amber-600">belum dipetakan</span>}
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+            <p className="mt-1 text-[10px] text-slate-400">
+              Berlabel "belum dipetakan" = belum terhubung ke akun (jurnal ditunda sampai dipetakan di{" "}
+              <Link to={settingsPath("klasifikasi")} className="font-bold text-emerald-700 hover:underline">Pengaturan › Klasifikasi Pengajuan</Link>).
+            </p>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="text-[11px] font-bold text-slate-500">Bukti pembayaran (wajib, maks 5 file × 10 MB)
+              <input
+                type="file"
+                multiple
+                accept=".jpg,.jpeg,.png,.webp,.pdf"
+                onChange={(e) => setFiles(Array.from(e.target.files || []).slice(0, 5))}
+                className="mt-1 block w-full rounded-lg border border-slate-200 bg-white p-1.5 text-xs text-slate-500 file:mr-3 file:rounded-lg file:border-0 file:bg-emerald-50 file:px-3 file:py-1.5 file:text-xs file:font-bold file:text-emerald-700"
+              />
             </label>
             <label className="text-[11px] font-bold text-slate-500">{method === "kredit" ? "Total tagihan (Rp)" : "Nominal bayar (Rp)"}
-              <input type="number" min="0" value={nominal} onChange={(e) => setNominal(e.target.value)} className={cn(inputCls, "mt-1")} />
+              <input type="number" min="0" value={nominal} onChange={(e) => setNominal(e.target.value)} className={cn(inputCls, "mt-1")} placeholder="0" />
             </label>
             <label className="text-[11px] font-bold text-slate-500">Biaya admin (Rp, opsional)
-              <input type="number" min="0" value={adminFee} onChange={(e) => setAdminFee(e.target.value)} className={cn(inputCls, "mt-1")} />
+              <input type="number" min="0" value={adminFee} onChange={(e) => setAdminFee(e.target.value)} className={cn(inputCls, "mt-1")} placeholder="0" />
             </label>
             {method === "kredit" && (
-              <div className="sm:col-span-2">
+              <div>
                 <p className="text-[11px] font-bold text-slate-500">Termin</p>
                 <div className="mt-1 flex gap-2">
                   <input type="number" min="1" value={terminValue} onChange={(e) => setTerminValue(e.target.value)} className={inputCls} placeholder="30" />
@@ -221,14 +270,40 @@ export default function PayModal({ pr, scope, onClose, onDone }) {
           </label>
 
           <div>
-            <p className="text-[11px] font-bold text-slate-500">Bukti pembayaran (wajib, JPG/PNG/WEBP/PDF, maks 5 file × 10 MB)</p>
-            <input
-              type="file"
-              multiple
-              accept=".jpg,.jpeg,.png,.webp,.pdf"
-              onChange={(e) => setFiles(Array.from(e.target.files || []).slice(0, 5))}
-              className="mt-1 block w-full text-xs text-slate-500 file:mr-3 file:rounded-lg file:border-0 file:bg-emerald-50 file:px-3 file:py-1.5 file:text-xs file:font-bold file:text-emerald-700"
-            />
+            <p className="mb-1.5 text-[11px] font-bold text-slate-500">Posting jurnal</p>
+            <div className="overflow-hidden rounded-lg border border-slate-100">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  <tr><th className="w-16 px-3 py-1.5 text-left">Posisi</th><th className="px-3 py-1.5 text-left">Klasifikasi / sumber dana</th><th className="px-3 py-1.5 text-left">Akun</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {picked.map((id) => (
+                    <tr key={id}>
+                      <td className="px-3 py-1.5 font-bold text-emerald-700">Debit</td>
+                      <td className="px-3 py-1.5 text-slate-600">{className(id)}</td>
+                      <td className="px-3 py-1.5">
+                        <select aria-label={`Akun debit ${className(id)}`} value={debitSel[id] || ""} onChange={(e) => setDebitSel((p) => ({ ...p, [id]: e.target.value }))} className={cn(selectCls, "w-full")}>
+                          <option value="">— Otomatis (sesuai pemetaan) —</option>
+                          {accounts.map((a) => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
+                        </select>
+                      </td>
+                    </tr>
+                  ))}
+                  {!picked.length && <tr><td className="px-3 py-1.5 font-bold text-emerald-700">Debit</td><td className="px-3 py-1.5 text-slate-400" colSpan={2}>Pilih klasifikasi dulu</td></tr>}
+                  <tr>
+                    <td className="px-3 py-1.5 font-bold text-rose-600">Kredit</td>
+                    <td className="px-3 py-1.5 text-slate-600">{method === "kredit" ? "Utang usaha" : "Sumber dana (Kas/Bank)"}</td>
+                    <td className="px-3 py-1.5">
+                      <select aria-label="Akun kredit" value={creditSel} onChange={(e) => { setCreditTouched(true); setCreditSel(e.target.value); }} className={cn(selectCls, "w-full")}>
+                        <option value="">— Otomatis (sesuai metode) —</option>
+                        {accounts.map((a) => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
+                      </select>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-1 text-[10px] text-slate-400">Jurnal dibuat otomatis memakai akun di atas. Biaya admin tetap Debit Beban Administrasi Bank.</p>
           </div>
 
           {error && <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{error}</p>}
